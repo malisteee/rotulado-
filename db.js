@@ -1,5 +1,5 @@
 // Capa de datos: Supabase (en línea, con cuentas) o modo prueba local (IndexedDB).
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=4";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=5";
 
 export const isDemo = !SUPABASE_URL || !SUPABASE_ANON_KEY;
 const BUCKET = "radiografias";
@@ -21,7 +21,7 @@ function supabaseBackend() {
 
   return {
     async init() {
-      const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm");
+      const { createClient } = await import("./vendor/supabase.js?v=2.117.2");
       sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     },
     async getUser() {
@@ -228,3 +228,5 @@ function localBackend() {
 }
 
 export const db = isDemo ? localBackend() : supabaseBackend();
+// Datos guardados en este dispositivo antes de activar las cuentas
+export const localDb = isDemo ? db : localBackend();

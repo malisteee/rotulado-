@@ -1,4 +1,4 @@
-import { db, isDemo } from "./db.js?v=4";
+import { db, isDemo, localDb } from "./db.js?v=5";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -224,11 +224,15 @@ async function newDeck() {
 
 async function renderHome() {
   const decks = await db.listDecks();
+  let localDecks = [];
+  if (!isDemo) try { localDecks = await localDb.listDecks(); } catch {}
   const t = deckStats(decks.flatMap((d) => d.images));
   $app.innerHTML = frame(decks, "home", `
   <div class="page">
     <div class="topbar">${menuBtn}<h1>Mis carpetas</h1></div>
     ${isDemo ? `<div class="banner">💾 Todavía no tienes cuenta: lo que hagas se guarda solo en este dispositivo. <a href="#/cuenta">¿Qué significa?</a></div>` : ""}
+    ${localDecks.length ? `<div class="banner" id="migrate">📲 En este dispositivo tienes <b>${localDecks.length} carpeta${localDecks.length === 1 ? "" : "s"}</b> de antes de crear tu cuenta.
+      <button class="btn small primary" id="doMigrate" style="margin-left:8px">Pasarlas a mi cuenta</button></div>` : ""}
     ${t.labels ? `<div class="today">
         <span class="pill">🔥 Hoy repasaste <b>${t.today}</b> rótulo${t.today === 1 ? "" : "s"}</span>
         <span class="pill">✅ <b>${t.known}</b> de ${t.labels} aprendidos</span>
@@ -252,6 +256,29 @@ async function renderHome() {
   </div>`);
   wireFrame();
   $app.querySelector("#new").onclick = newDeck;
+  $app.querySelector("#doMigrate")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      let n = 0;
+      const total = localDecks.reduce((k, d) => k + d.images.length, 0);
+      for (const d of localDecks) {
+        const deck = await db.createDeck(d.name);
+        for (const im of await localDb.listImages(d.id)) {
+          e.target.textContent = `Pasando ${++n} de ${total}…`;
+          const [u] = await localDb.imageUrls([im]);
+          const blob = await (await fetch(u)).blob();
+          const row = await db.uploadImage(deck.id, blob, im.title || "", im.width, im.height);
+          await db.updateImage(row.id, { labels: im.labels || [], label_size: im.label_size || 1 });
+        }
+        await localDb.deleteDeck(d.id);
+      }
+      toast("¡Listo! Tus carpetas ya están en tu cuenta ✓");
+    } catch (err) {
+      console.error(err);
+      toast("No se pudo terminar. Intenta de nuevo.");
+    }
+    route();
+  });
   $app.querySelectorAll(".card").forEach((c) => (c.onclick = () => go(`#/deck/${c.dataset.id}`)));
 }
 

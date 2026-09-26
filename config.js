@@ -7,5 +7,5 @@
 // Si dejas estos valores vacíos, la página funciona en "modo prueba":
 // todo se guarda solo en el dispositivo que estás usando.
 
-export const SUPABASE_URL = "";
-export const SUPABASE_ANON_KEY = "";
+export const SUPABASE_URL = "https://ufwvqrrupdtqeiiyvugy.supabase.co";
+export const SUPABASE_ANON_KEY = "sb_publishable_6rrzDPUPH-wlcFHQRMtbgA_1r3LTG0W";
