@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=6";
+import { db, isDemo, localDb } from "./db.js?v=7";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -18,6 +18,19 @@ const shuffle = (arr) => {
 };
 const COLORS = ["#ff9ebb", "#ffc09f", "#ffe38f", "#9ee6c0", "#9cc9ff", "#c9a7ff"];
 let lastColor = COLORS[0];
+
+// En iPad/iPhone, si la página enfoca un campo por su cuenta aparece el cursor pero
+// NO el teclado, y tocar el campo después no hace nada. Por eso solo enfocamos solos
+// con mouse/teclado, y si tocas un campo "enfocado a medias" lo reiniciamos.
+const canAutoFocus = matchMedia("(hover: hover) and (pointer: fine)").matches;
+document.addEventListener(
+  "pointerdown",
+  (e) => {
+    const t = e.target;
+    if (e.pointerType !== "mouse" && t.matches?.("input:not([type=range]):not([type=checkbox]), textarea") && document.activeElement === t) t.blur();
+  },
+  true
+);
 const todayStr = () => new Date().toLocaleDateString("sv"); // AAAA-MM-DD
 const pref = {
   get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
@@ -533,7 +546,7 @@ function askNames(files) {
       e.preventDefault();
       close(inputs.map((inp, i) => inp.value.trim() || (files.length === 1 ? "Radiografía" : `Radiografía ${i + 1}`)));
     };
-    setTimeout(() => inputs[0].focus(), 50);
+    if (canAutoFocus) setTimeout(() => inputs[0].focus(), 50);
   });
 }
 
@@ -878,7 +891,7 @@ async function renderViewer(imgId, mode) {
         l.note = note.value;
         scheduleSave();
       };
-      note.onkeydown = (e) => e.key === "Enter" && deselect();
+      note.onkeydown = (e) => { if (e.key === "Enter") deselect(); };
       input.oninput = () => {
         firstEdit();
         l.text = input.value;
@@ -890,7 +903,7 @@ async function renderViewer(imgId, mode) {
         drawArrows();
         scheduleSave();
       };
-      input.onkeydown = (e) => e.key === "Enter" && deselect();
+      input.onkeydown = (e) => { if (e.key === "Enter") deselect(); };
       bottom.querySelectorAll(".color").forEach((b) => (b.onclick = () => {
         snap();
         l.color = lastColor = b.dataset.c;
@@ -916,7 +929,7 @@ async function renderViewer(imgId, mode) {
         scheduleSave();
       };
       bottom.querySelector("#done").onclick = deselect;
-      if (focus) input.focus();
+      if (focus && canAutoFocus) input.focus();
     } else if (mode === "quiz" && quiz) {
       renderQuizBar();
     } else bottom.innerHTML = "";
@@ -972,7 +985,7 @@ async function renderViewer(imgId, mode) {
       };
       bottom.querySelector("#idk").onclick = () => answer("");
       wireHint();
-      ans.focus({ preventScroll: true });
+      if (canAutoFocus) ans.focus({ preventScroll: true });
     } else {
       const r = quiz.last;
       const msg = r.grade === "right" ? `✓ ¡Correcto! <b>${esc(cur.text)}</b>`
@@ -995,7 +1008,7 @@ async function renderViewer(imgId, mode) {
         renderBottom();
         renderLabels();
       };
-      next.focus();
+      if (canAutoFocus) next.focus();
       bottom.querySelector("#override")?.addEventListener("click", () => {
         cur.fail = Math.max(0, (cur.fail || 0) - 1);
         cur.ok = (cur.ok || 0) + 1;
