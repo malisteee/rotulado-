@@ -1,4 +1,4 @@
-import { db, isDemo } from "./db.js?v=3";
+import { db, isDemo } from "./db.js?v=4";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -119,6 +119,8 @@ async function route() {
     if (parts[0] === "deck" && parts[2] === "study") await startDeckStudy(parts[1], parts[3] === "hard");
     else if (parts[0] === "deck" && parts[1]) await renderDeck(parts[1]);
     else if (parts[0] === "img" && parts[1]) await renderViewer(parts[1], parts[2] || "edit");
+    else if (parts[0] === "progreso") await renderProgress();
+    else if (parts[0] === "cuenta") await renderAccount();
     else await renderHome();
   } catch (e) {
     console.error(e);
@@ -185,24 +187,54 @@ function renderAuth(mode = "login", msg = "", ok = false) {
 /* ================================================================== */
 /* Inicio: carpetas                                                    */
 /* ================================================================== */
+function frame(decks, active, content) {
+  return `<div class="shell">
+  <aside class="side" id="side">
+    <div class="brand">Rotula<span>do</span></div>
+    <nav>
+      <a href="#/" class="${active === "home" ? "on" : ""}">🏠 Inicio</a>
+      <a href="#/progreso" class="${active === "progress" ? "on" : ""}">📊 Mi progreso</a>
+      <a href="#/cuenta" class="${active === "account" ? "on" : ""}">👤 Mi cuenta</a>
+    </nav>
+    <div class="side-h">Mis carpetas</div>
+    <nav>
+      ${decks.map((d) => `<a href="#/deck/${d.id}" class="${active === d.id ? "on" : ""}">📁 <span class="ell">${esc(d.name)}</span><small>${deckStats(d.images).pct}%</small></a>`).join("")}
+      <button class="side-new" id="sideNew">＋ Nueva carpeta</button>
+    </nav>
+    <a class="side-foot" href="#/cuenta">${isDemo ? "💾 Sin cuenta (solo este dispositivo)" : `👤 ${esc(user.email)}`}</a>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+  <main class="main">${content}</main>
+</div>`;
+}
+const menuBtn = `<button class="icon-btn menu-btn" aria-label="Menú">☰</button>`;
+function wireFrame() {
+  const close = () => document.body.classList.remove("side-open");
+  $app.querySelectorAll(".menu-btn").forEach((b) => (b.onclick = () => document.body.classList.add("side-open")));
+  $app.querySelector("#scrim").onclick = close;
+  $app.querySelectorAll(".side a").forEach((a) => a.addEventListener("click", close));
+  $app.querySelector("#sideNew").onclick = () => { close(); newDeck(); };
+}
+async function newDeck() {
+  const name = prompt("Nombre de la carpeta (ej: Codo, Hombro, Tórax AP):");
+  if (!name?.trim()) return;
+  const d = await db.createDeck(name.trim());
+  go(`#/deck/${d.id}`);
+}
+
 async function renderHome() {
   const decks = await db.listDecks();
-  $app.innerHTML = `
+  const t = deckStats(decks.flatMap((d) => d.images));
+  $app.innerHTML = frame(decks, "home", `
   <div class="page">
-    <div class="topbar">
-      <h1>Mis carpetas</h1>
-      ${isDemo ? "" : `<span class="muted" style="font-size:13px">${esc(user.email)}</span>
-      <button class="btn small ghost" id="logout">Salir</button>`}
-    </div>
-    ${isDemo ? `<div class="banner">💾 Por ahora tus radiografías se guardan solo en este dispositivo. Cuando activemos las cuentas podrás verlas desde cualquier lado (y traspasarlas con “Descargar respaldo”).</div>` : ""}
-    ${(() => {
-      const t = deckStats(decks.flatMap((d) => d.images));
-      return t.labels ? `<div class="today">
+    <div class="topbar">${menuBtn}<h1>Mis carpetas</h1></div>
+    ${isDemo ? `<div class="banner">💾 Todavía no tienes cuenta: lo que hagas se guarda solo en este dispositivo. <a href="#/cuenta">¿Qué significa?</a></div>` : ""}
+    ${t.labels ? `<div class="today">
         <span class="pill">🔥 Hoy repasaste <b>${t.today}</b> rótulo${t.today === 1 ? "" : "s"}</span>
         <span class="pill">✅ <b>${t.known}</b> de ${t.labels} aprendidos</span>
         ${t.hard ? `<span class="pill">🔁 <b>${t.hard}</b> difíciles</span>` : ""}
-      </div>` : "";
-    })()}
+        <a class="pill" href="#/progreso">📊 Ver mi progreso →</a>
+      </div>` : ""}
     <div class="row" style="margin-bottom:16px">
       <button class="btn primary" id="new">＋ Nueva carpeta</button>
     </div>
@@ -217,22 +249,89 @@ async function renderHome() {
       </button>`;
     }).join("")}</div>`
     : `<div class="empty"><div class="big">📁</div><p>Crea tu primera carpeta, por ejemplo <b>Codo</b> o <b>Tórax</b>.</p></div>`}
-    <div class="row" style="margin-top:28px">
-      <button class="btn small" id="export" ${decks.length ? "" : "disabled"}>⬇️ Descargar respaldo</button>
-      <label class="btn small">⬆️ Cargar respaldo<input type="file" accept=".json,application/json" hidden id="import" /></label>
-      <span class="upload-progress" id="bk" style="margin:0"></span>
+  </div>`);
+  wireFrame();
+  $app.querySelector("#new").onclick = newDeck;
+  $app.querySelectorAll(".card").forEach((c) => (c.onclick = () => go(`#/deck/${c.dataset.id}`)));
+}
+
+/* ---------- Mi progreso ---------- */
+async function renderProgress() {
+  const decks = await db.listDecks();
+  const all = deckStats(decks.flatMap((d) => d.images));
+  const hard = decks
+    .flatMap((d) => d.images.flatMap((im) => withText(im.labels).filter(isHard).map((l) => ({ l, im, d }))))
+    .sort((a, b) => ((b.l.fail || 0) - (b.l.ok || 0)) - ((a.l.fail || 0) - (a.l.ok || 0)))
+    .slice(0, 20);
+  $app.innerHTML = frame(decks, "progress", `
+  <div class="page">
+    <div class="topbar">${menuBtn}<h1>Mi progreso</h1></div>
+    ${all.labels ? `
+    <div class="kpis">
+      <div class="kpi"><b>${all.pct}%</b><span>aprendido</span></div>
+      <div class="kpi"><b>${all.known}</b><span>de ${all.labels} rótulos sabidos</span></div>
+      <div class="kpi"><b>${all.today}</b><span>repasados hoy</span></div>
+      <div class="kpi"><b>${all.hard}</b><span>difíciles</span></div>
     </div>
-  </div>`;
+    <h2 class="sec">Por carpeta</h2>
+    <div class="plist">${decks.map((d) => {
+      const s = deckStats(d.images);
+      return `<a class="prow" href="#/deck/${d.id}">
+        <span class="ell"><b>${esc(d.name)}</b><br><small class="muted">${s.known} de ${s.labels} sabidos${s.hard ? ` · ${s.hard} difíciles` : ""}</small></span>
+        <span class="bar"><i style="width:${s.pct}%"></i></span><b>${s.pct}%</b></a>`;
+    }).join("")}</div>
+    <h2 class="sec">Los que más te cuestan</h2>
+    ${hard.length ? `<div class="plist">${hard.map(({ l, im, d }) => `
+      <a class="prow" href="#/img/${im.id}/quiz">
+        <span class="ell"><b>${esc(l.text)}</b><br><small class="muted">${esc(d.name)} · ${esc(im.title || "Sin título")}</small></span>
+        <small class="muted">✓ ${l.ok || 0} · ✗ ${l.fail || 0}</small><span class="btn small">Practicar</span></a>`).join("")}</div>`
+    : `<p class="muted">¡Nada por ahora! Cuando falles un rótulo en el quiz aparecerá aquí. 🎉</p>`}
+    <p class="muted" style="font-size:13px;margin-top:20px">Un rótulo cuenta como “sabido” cuando lo respondiste bien la última vez que te lo preguntaron en el Quiz.</p>`
+    : `<div class="empty"><div class="big">📊</div><p>Aquí verás tu avance cuando rotules imágenes y hagas el <b>Quiz</b>.</p></div>`}
+  </div>`);
+  wireFrame();
+}
+
+/* ---------- Mi cuenta ---------- */
+async function renderAccount() {
+  const decks = await db.listDecks();
+  $app.innerHTML = frame(decks, "account", `
+  <div class="page">
+    <div class="topbar">${menuBtn}<h1>Mi cuenta</h1></div>
+    ${isDemo ? `
+    <div class="box">
+      <h3>🔒 Las cuentas todavía no están activadas</h3>
+      <p>Por ahora la página funciona <b>sin cuenta</b>: todo lo que haces queda guardado solo en <b>este dispositivo</b>.
+      Si abres el link en otro iPad o en el celular, no vas a ver tus carpetas.</p>
+      <p>Para activar las cuentas falta conectar un servicio gratuito que guarda las fotos en internet (se llama <b>Supabase</b>).
+      Lo hacemos juntos con Claude en unos minutos. Cuando esté listo, aquí te aparecerá <b>Crear cuenta / Entrar</b>,
+      y tus amigos podrán tener cada uno la suya, sin ver lo tuyo.</p>
+      <p class="muted">Mientras tanto, descarga un respaldo de vez en cuando: sirve para no perder nada y para pasar todo a tu cuenta después.</p>
+    </div>` : `
+    <div class="box">
+      <h3>👤 ${esc(user.email)}</h3>
+      <p class="muted">Tus carpetas, fotos y progreso son privados. Solo tú los ves.</p>
+      <div class="row"><button class="btn" id="pw">🔑 Cambiar contraseña</button><button class="btn danger" id="logout">Cerrar sesión</button></div>
+    </div>`}
+    <div class="box">
+      <h3>💾 Respaldo</h3>
+      <p class="muted">Descarga un archivo con todas tus carpetas, fotos y rótulos. Puedes cargarlo después en otro dispositivo o en tu cuenta.</p>
+      <div class="row">
+        <button class="btn" id="export" ${decks.length ? "" : "disabled"}>⬇️ Descargar respaldo</button>
+        <label class="btn">⬆️ Cargar respaldo<input type="file" accept=".json,application/json" hidden id="import" /></label>
+        <span class="upload-progress" id="bk" style="margin:0"></span>
+      </div>
+    </div>
+  </div>`);
+  wireFrame();
   $app.querySelector("#export").onclick = () => exportBackup($app.querySelector("#bk"));
   $app.querySelector("#import").onchange = (e) => e.target.files[0] && importBackup(e.target.files[0], $app.querySelector("#bk"));
-  $app.querySelector("#new").onclick = async () => {
-    const name = prompt("Nombre de la carpeta (ej: Codo, Hombro, Tórax AP):");
-    if (!name?.trim()) return;
-    const d = await db.createDeck(name.trim());
-    go(`#/deck/${d.id}`);
-  };
   $app.querySelector("#logout")?.addEventListener("click", () => db.signOut());
-  $app.querySelectorAll(".card").forEach((c) => (c.onclick = () => go(`#/deck/${c.dataset.id}`)));
+  $app.querySelector("#pw")?.addEventListener("click", async () => {
+    const pw = prompt("Nueva contraseña (mín. 6 caracteres):");
+    if (!pw) return;
+    try { await db.updatePassword(pw); toast("Contraseña actualizada ✓"); } catch (e) { toast(e.message); }
+  });
 }
 
 /* ---------- Respaldo: descargar / cargar ---------- */
@@ -297,13 +396,13 @@ async function importBackup(file, status) {
 /* Carpeta                                                             */
 /* ================================================================== */
 async function renderDeck(deckId) {
-  const [deck, images] = await Promise.all([db.getDeck(deckId), db.listImages(deckId)]);
+  const [deck, images, decks] = await Promise.all([db.getDeck(deckId), db.listImages(deckId), db.listDecks()]);
   const urls = await db.imageUrls(images);
   const s = deckStats(images);
-  $app.innerHTML = `
+  $app.innerHTML = frame(decks, deckId, `
   <div class="page">
     <div class="topbar">
-      <a class="icon-btn" href="#/" aria-label="Volver">←</a>
+      ${menuBtn}
       <h1>${esc(deck.name)}</h1>
       <button class="icon-btn" id="rename" aria-label="Renombrar">✎</button>
       <button class="icon-btn" id="del" aria-label="Borrar carpeta">🗑</button>
@@ -327,7 +426,8 @@ async function renderDeck(deckId) {
       </button>`;
     }).join("")}</div>`
     : `<div class="empty"><div class="big">🩻</div><p>Sube tus radiografías (puedes elegir varias a la vez).</p></div>`}
-  </div>`;
+  </div>`);
+  wireFrame();
 
   $app.querySelectorAll(".thumb").forEach((t) => (t.onclick = () => go(`#/img/${t.dataset.id}/edit`)));
   $app.querySelector("#rename").onclick = async () => {

@@ -1,5 +1,5 @@
 // Capa de datos: Supabase (en línea, con cuentas) o modo prueba local (IndexedDB).
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=3";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=4";
 
 export const isDemo = !SUPABASE_URL || !SUPABASE_ANON_KEY;
 const BUCKET = "radiografias";
@@ -55,7 +55,7 @@ function supabaseBackend() {
     },
 
     async listDecks() {
-      const rows = must(await sb.from("decks").select("id,name,created_at,images(labels)").order("created_at"));
+      const rows = must(await sb.from("decks").select("id,name,created_at,images(id,title,labels)").order("created_at"));
       return rows.map((d) => ({ ...d, images: d.images || [] }));
     },
     async createDeck(name) {
