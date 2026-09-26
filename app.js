@@ -16,8 +16,20 @@ const shuffle = (arr) => {
   }
   return a;
 };
-const COLORS = ["#ff5c7a", "#ff9f43", "#ffd23f", "#3ddc84", "#4da3ff", "#b07cff"];
+const COLORS = ["#ff9ebb", "#ffc09f", "#ffe38f", "#9ee6c0", "#9cc9ff", "#c9a7ff"];
 let lastColor = COLORS[0];
+const todayStr = () => new Date().toLocaleDateString("sv"); // AAAA-MM-DD
+const pref = {
+  get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+};
+const blobToDataURL = (blob) =>
+  new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(blob);
+  });
 
 let toastT;
 function toast(msg, ms = 2200) {
@@ -66,6 +78,7 @@ function deckStats(images) {
     imgs: images.length,
     labels: labels.length,
     known,
+    today: labels.filter((l) => l.seen === todayStr()).length,
     hard: labels.filter(isHard).length,
     pct: labels.length ? Math.round((known / labels.length) * 100) : 0,
   };
@@ -181,7 +194,15 @@ async function renderHome() {
       ${isDemo ? "" : `<span class="muted" style="font-size:13px">${esc(user.email)}</span>
       <button class="btn small ghost" id="logout">Salir</button>`}
     </div>
-    ${isDemo ? `<div class="banner">Modo prueba: todo se guarda solo en este dispositivo. Cuando conectemos Supabase tendrás cuenta y acceso desde cualquier lado.</div>` : ""}
+    ${isDemo ? `<div class="banner">💾 Por ahora tus radiografías se guardan solo en este dispositivo. Cuando activemos las cuentas podrás verlas desde cualquier lado (y traspasarlas con “Descargar respaldo”).</div>` : ""}
+    ${(() => {
+      const t = deckStats(decks.flatMap((d) => d.images));
+      return t.labels ? `<div class="today">
+        <span class="pill">🔥 Hoy repasaste <b>${t.today}</b> rótulo${t.today === 1 ? "" : "s"}</span>
+        <span class="pill">✅ <b>${t.known}</b> de ${t.labels} aprendidos</span>
+        ${t.hard ? `<span class="pill">🔁 <b>${t.hard}</b> difíciles</span>` : ""}
+      </div>` : "";
+    })()}
     <div class="row" style="margin-bottom:16px">
       <button class="btn primary" id="new">＋ Nueva carpeta</button>
     </div>
@@ -189,14 +210,21 @@ async function renderHome() {
       const s = deckStats(d.images);
       return `<button class="card" data-id="${d.id}">
         <h3>${esc(d.name)}</h3>
-        <div class="stats"><span>🩻 ${s.imgs} imagen${s.imgs === 1 ? "" : "es"}</span><span>🏷️ ${s.labels} rótulos</span>
+        <div class="stats"><span>🩻 ${s.imgs} ${s.imgs === 1 ? "imagen" : "imágenes"}</span><span>🏷️ ${s.labels} rótulos</span>
         ${s.hard ? `<span><i class="dot"></i>${s.hard} difíciles</span>` : ""}</div>
         <div class="stats"><span>${s.pct}% aprendido</span></div>
         <div class="bar"><i style="width:${s.pct}%"></i></div>
       </button>`;
     }).join("")}</div>`
     : `<div class="empty"><div class="big">📁</div><p>Crea tu primera carpeta, por ejemplo <b>Codo</b> o <b>Tórax</b>.</p></div>`}
+    <div class="row" style="margin-top:28px">
+      <button class="btn small" id="export" ${decks.length ? "" : "disabled"}>⬇️ Descargar respaldo</button>
+      <label class="btn small">⬆️ Cargar respaldo<input type="file" accept=".json,application/json" hidden id="import" /></label>
+      <span class="upload-progress" id="bk" style="margin:0"></span>
+    </div>
   </div>`;
+  $app.querySelector("#export").onclick = () => exportBackup($app.querySelector("#bk"));
+  $app.querySelector("#import").onchange = (e) => e.target.files[0] && importBackup(e.target.files[0], $app.querySelector("#bk"));
   $app.querySelector("#new").onclick = async () => {
     const name = prompt("Nombre de la carpeta (ej: Codo, Hombro, Tórax AP):");
     if (!name?.trim()) return;
@@ -205,6 +233,64 @@ async function renderHome() {
   };
   $app.querySelector("#logout")?.addEventListener("click", () => db.signOut());
   $app.querySelectorAll(".card").forEach((c) => (c.onclick = () => go(`#/deck/${c.dataset.id}`)));
+}
+
+/* ---------- Respaldo: descargar / cargar ---------- */
+async function exportBackup(status) {
+  try {
+    const decks = await db.listDecks();
+    const out = { app: "rotulado", version: 1, date: new Date().toISOString(), decks: [] };
+    const total = decks.reduce((n, d) => n + d.images.length, 0);
+    let n = 0;
+    for (const d of decks) {
+      const imgs = await db.listImages(d.id);
+      const urls = await db.imageUrls(imgs);
+      const items = [];
+      for (let i = 0; i < imgs.length; i++) {
+        status.textContent = `Preparando ${++n} de ${total}…`;
+        const blob = await (await fetch(urls[i])).blob();
+        const { title, width, height, labels, label_size } = imgs[i];
+        items.push({ title, width, height, labels, label_size, data: await blobToDataURL(blob) });
+      }
+      out.decks.push({ name: d.name, images: items });
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(out)], { type: "application/json" }));
+    a.download = `rotulado-respaldo-${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    status.textContent = "";
+    toast("Respaldo descargado ✓");
+  } catch (e) {
+    console.error(e);
+    status.textContent = "";
+    toast("No se pudo crear el respaldo");
+  }
+}
+async function importBackup(file, status) {
+  try {
+    const data = JSON.parse(await file.text());
+    if (data.app !== "rotulado" || !Array.isArray(data.decks)) throw new Error("formato");
+    const total = data.decks.reduce((n, d) => n + d.images.length, 0);
+    if (!confirm(`Se agregarán ${data.decks.length} carpeta(s) con ${total} imagen(es). ¿Continuar?`)) return;
+    let n = 0;
+    for (const d of data.decks) {
+      const deck = await db.createDeck(d.name);
+      for (const im of d.images) {
+        status.textContent = `Cargando ${++n} de ${total}…`;
+        const blob = await (await fetch(im.data)).blob();
+        const row = await db.uploadImage(deck.id, blob, im.title || "", im.width, im.height);
+        await db.updateImage(row.id, { labels: im.labels || [], label_size: im.label_size || 1 });
+      }
+    }
+    toast("Respaldo cargado ✓");
+    route();
+  } catch (e) {
+    console.error(e);
+    status.textContent = "";
+    toast("Ese archivo no es un respaldo válido");
+  }
 }
 
 /* ================================================================== */
@@ -295,7 +381,14 @@ async function startDeckStudy(deckId, hardOnly) {
 /* ================================================================== */
 async function renderViewer(imgId, mode) {
   const img = await db.getImage(imgId);
-  const [url] = await db.imageUrls([img]);
+  const [[url], deckImgs, allDecks] = await Promise.all([
+    db.imageUrls([img]),
+    db.listImages(img.deck_id),
+    db.listDecks(),
+  ]);
+  let quizType = pref.get("quizType", "write"); // write | choice
+  const undoStack = []; // deshacer
+  let preEdit = null;
   const labels = (img.labels || []).map((l) => ({ ...l }));
   let labelSize = img.label_size || 1;
   if (session && session.ids[session.idx] !== imgId) session = null;
@@ -333,7 +426,7 @@ async function renderViewer(imgId, mode) {
 
   /* ---------- Guardado ---------- */
   let saveT = null;
-  const setSave = (t) => ($("#saveState").textContent = t);
+  const setSave = (t) => { const el = $("#saveState"); if (el) el.textContent = t; };
   const scheduleSave = () => {
     setSave("Guardando…");
     clearTimeout(saveT);
@@ -344,7 +437,7 @@ async function renderViewer(imgId, mode) {
     saveT = null;
     try {
       await db.updateImage(img.id, {
-        title: $("#title").value.trim(),
+        title: titleVal.trim(),
         labels: labels.filter((l) => (l.text || "").trim() || l.id === sel),
         label_size: labelSize,
       });
@@ -355,7 +448,11 @@ async function renderViewer(imgId, mode) {
       toast("No se pudo guardar. Revisa tu conexión.");
     }
   }
-  $("#title").oninput = scheduleSave;
+  let titleVal = img.title || "";
+  $("#title").oninput = (e) => {
+    titleVal = e.target.value;
+    scheduleSave();
+  };
 
   /* ---------- Zoom y encuadre ---------- */
   let baseW = 0, baseH = 0, fs = 16;
@@ -471,8 +568,24 @@ async function renderViewer(imgId, mode) {
     if (mode === "edit") {
       tools.innerHTML = `
         <span class="hint">👆 Toca la estructura para poner un rótulo · arrastra el rótulo o la punta ⚪ para moverlos</span>
+        <button class="btn small" id="undo" ${undoStack.length ? "" : "disabled"}>↶ Deshacer</button>
         <label class="size">Aa <input type="range" id="size" min="0.5" max="2" step="0.1" value="${labelSize}" /></label>
+        <select id="move" aria-label="Mover a carpeta">
+          ${allDecks.map((d) => `<option value="${d.id}" ${d.id === img.deck_id ? "selected" : ""}>📁 ${esc(d.name)}</option>`).join("")}
+        </select>
         <button class="btn small danger" id="delImg">🗑 Borrar imagen</button>`;
+      tools.querySelector("#undo").onclick = undo;
+      tools.querySelector("#move").onchange = async (e) => {
+        const to = allDecks.find((d) => d.id === e.target.value);
+        try {
+          await db.updateImage(img.id, { deck_id: to.id });
+          img.deck_id = to.id;
+          toast(`Movida a “${to.name}” ✓`);
+        } catch {
+          toast("No se pudo mover");
+          e.target.value = img.deck_id;
+        }
+      };
       tools.querySelector("#size").oninput = (e) => {
         labelSize = +e.target.value;
         const s = { ...view };
@@ -511,13 +624,42 @@ async function renderViewer(imgId, mode) {
       tools.innerHTML = `
         <span class="hint">${session ? `Imagen ${session.idx + 1} de ${session.ids.length} · ` : ""}Rótulo ${Math.min(done + 1, total)} de ${total}
         · ✓ ${ok} · ✗ ${done - ok}</span>
+        <div class="seg" id="qtype">
+          <button data-t="write" class="${quizType === "write" ? "on" : ""}">✍️ Escribir</button>
+          <button data-t="choice" class="${quizType === "choice" ? "on" : ""}">🔘 Opciones</button>
+        </div>
         ${session ? "" : `<button class="btn small" id="restart">↺ Reiniciar</button>`}`;
       tools.querySelector("#restart")?.addEventListener("click", () => setMode("quiz"));
+      tools.querySelector("#qtype").onclick = (e) => {
+        const t = e.target.closest("button")?.dataset.t;
+        if (!t || t === quizType) return;
+        quizType = t;
+        pref.set("quizType", t);
+        renderTools();
+        renderBottom();
+      };
     }
   }
 
   /* ---------- Hoja de edición del rótulo ---------- */
-  function select(id, focus = true) {
+  function snap() {
+    undoStack.push(JSON.stringify(labels));
+    if (undoStack.length > 60) undoStack.shift();
+    const u = tools.querySelector("#undo");
+    if (u) u.disabled = false;
+  }
+  function undo() {
+    if (!undoStack.length) return;
+    labels.splice(0, labels.length, ...JSON.parse(undoStack.pop()));
+    sel = null;
+    preEdit = null;
+    renderLabels();
+    renderBottom();
+    renderTools();
+    scheduleSave();
+  }
+  function select(id, focus = true, fresh = false) {
+    preEdit = fresh ? null : JSON.stringify(labels);
     sel = id;
     renderLabels();
     renderBottom(focus);
@@ -538,6 +680,7 @@ async function renderViewer(imgId, mode) {
         <div class="sheet">
           <input class="input" id="lblText" value="${esc(l.text || "")}" placeholder="Nombre de la estructura (ej: Radio)"
             autocomplete="off" autocapitalize="sentences" enterkeyhint="done" />
+          <input class="input" id="lblNote" value="${esc(l.note || "")}" placeholder="💡 Pista o nota (opcional)" autocomplete="off" enterkeyhint="done" />
           <div class="row">
             <div class="colors">${COLORS.map((c) => `<button class="color ${c === l.color ? "on" : ""}" style="--c:${c}" data-c="${c}" aria-label="color"></button>`).join("")}</div>
             <label class="switch"><input type="checkbox" id="arrow" ${l.tx != null ? "checked" : ""}/> Flecha</label>
@@ -548,7 +691,23 @@ async function renderViewer(imgId, mode) {
           </div>
         </div>`;
       const input = bottom.querySelector("#lblText");
+      const firstEdit = () => {
+        if (preEdit) {
+          undoStack.push(preEdit);
+          preEdit = null;
+          const u = tools.querySelector("#undo");
+          if (u) u.disabled = false;
+        }
+      };
+      const note = bottom.querySelector("#lblNote");
+      note.oninput = () => {
+        firstEdit();
+        l.note = note.value;
+        scheduleSave();
+      };
+      note.onkeydown = (e) => e.key === "Enter" && deselect();
       input.oninput = () => {
+        firstEdit();
         l.text = input.value;
         const el = lbls.querySelector(`.lbl[data-id="${l.id}"]`);
         if (el) {
@@ -560,12 +719,14 @@ async function renderViewer(imgId, mode) {
       };
       input.onkeydown = (e) => e.key === "Enter" && deselect();
       bottom.querySelectorAll(".color").forEach((b) => (b.onclick = () => {
+        snap();
         l.color = lastColor = b.dataset.c;
         renderLabels();
         renderBottom();
         scheduleSave();
       }));
       bottom.querySelector("#arrow").onchange = (e) => {
+        snap();
         if (e.target.checked) {
           l.tx = clamp(l.x, 0, 1);
           l.ty = clamp(l.y + (l.y < 0.5 ? 0.12 : -0.12), 0, 1);
@@ -574,6 +735,7 @@ async function renderViewer(imgId, mode) {
         scheduleSave();
       };
       bottom.querySelector("#delLbl").onclick = () => {
+        if ((l.text || "").trim()) snap();
         labels.splice(labels.indexOf(l), 1);
         sel = null;
         renderLabels();
@@ -596,15 +758,33 @@ async function renderViewer(imgId, mode) {
     }
     // primero los difíciles, luego el resto, cada grupo en orden aleatorio
     const order = [...shuffle(pool.filter(isHard)), ...shuffle(pool.filter((l) => !isHard(l)))];
-    quiz = { order, i: 0, results: {}, answered: false, last: null };
+    quiz = { order, i: 0, results: {}, answered: false, last: null, options: {} };
   }
   function renderQuizBar() {
     const cur = quiz.order[quiz.i];
     if (!cur) return renderQuizEnd();
+    const hintBtn = cur.note?.trim() ? `<button class="btn small" type="button" id="hint">💡 Pista</button>` : "";
+    const wireHint = () =>
+      bottom.querySelector("#hint")?.addEventListener("click", (e) => {
+        e.currentTarget.outerHTML = `<span class="note">💡 ${esc(cur.note)}</span>`;
+      });
+    if (!quiz.answered && quizType === "choice") {
+      const opts = (quiz.options[cur.id] ??= buildChoices(cur));
+      if (opts) {
+        bottom.innerHTML = `
+          <div class="quizbar">
+            <div class="row"><span class="fb" style="margin-right:auto">¿Qué estructura es la que parpadea?</span>${hintBtn}</div>
+            <div class="choices">${opts.map((o, i) => `<button class="btn" data-i="${i}">${esc(o)}</button>`).join("")}</div>
+          </div>`;
+        bottom.querySelectorAll(".choices .btn").forEach((b) => (b.onclick = () => answer(opts[+b.dataset.i], true)));
+        wireHint();
+        return;
+      }
+    }
     if (!quiz.answered) {
       bottom.innerHTML = `
         <div class="quizbar">
-          <div class="fb">¿Qué estructura es la que parpadea?</div>
+          <div class="row"><span class="fb" style="margin-right:auto">¿Qué estructura es la que parpadea?</span>${hintBtn}</div>
           <form id="qf">
             <input class="input" id="ans" placeholder="Escribe tu respuesta" autocomplete="off" autocorrect="off"
               autocapitalize="off" spellcheck="false" enterkeyhint="go" />
@@ -618,17 +798,19 @@ async function renderViewer(imgId, mode) {
         answer(ans.value);
       };
       bottom.querySelector("#idk").onclick = () => answer("");
+      wireHint();
       ans.focus({ preventScroll: true });
     } else {
       const r = quiz.last;
       const msg = r.grade === "right" ? `✓ ¡Correcto! <b>${esc(cur.text)}</b>`
         : r.grade === "close" ? `✓ Casi perfecto, ojo con la ortografía: <b>${esc(cur.text)}</b>`
-        : `✗ Era <b>${esc(cur.text)}</b>${r.answer ? ` (escribiste “${esc(r.answer)}”)` : ""}`;
+        : `✗ Era <b>${esc(cur.text)}</b>${r.answer ? ` (${r.exact ? "elegiste" : "escribiste"} “${esc(r.answer)}”)` : ""}`;
       bottom.innerHTML = `
         <div class="quizbar">
           <div class="fb ${r.grade === "wrong" ? "bad" : "ok"}">${msg}</div>
+          ${cur.note?.trim() ? `<div class="note">💡 ${esc(cur.note)}</div>` : ""}
           <div class="row">
-            ${r.grade === "wrong" && r.answer ? `<button class="btn" id="override">Lo tenía bien</button>` : ""}
+            ${r.grade === "wrong" && r.answer && !r.exact ? `<button class="btn" id="override">Lo tenía bien</button>` : ""}
             <button class="btn primary" id="next" style="margin-left:auto">Siguiente →</button>
           </div>
         </div>`;
@@ -654,17 +836,29 @@ async function renderViewer(imgId, mode) {
       });
     }
   }
-  function answer(text) {
+  // 3 distractores: otros rótulos de esta imagen y de la carpeta
+  function buildChoices(cur) {
+    const seen = new Set([norm(cur.text)]);
+    const pool = [];
+    for (const t of [...withText(labels), ...deckImgs.flatMap((i) => withText(i.labels))].map((l) => l.text.trim())) {
+      const k = norm(t);
+      if (!seen.has(k)) { seen.add(k); pool.push(t); }
+    }
+    if (!pool.length) return null;
+    return shuffle([cur.text.trim(), ...shuffle(pool).slice(0, 3)]);
+  }
+  function answer(text, exact = false) {
     const cur = quiz.order[quiz.i];
-    const g = grade(text, cur.text);
+    const g = exact ? (text === cur.text.trim() ? "right" : "wrong") : grade(text, cur.text);
     const good = g !== "wrong";
     cur.ok = (cur.ok || 0) + (good ? 1 : 0);
     cur.fail = (cur.fail || 0) + (good ? 0 : 1);
     cur.last = good;
+    cur.seen = todayStr();
     if (session) good ? session.ok++ : session.fail++;
     quiz.results[cur.id] = g;
     quiz.answered = true;
-    quiz.last = { grade: g, answer: text.trim() };
+    quiz.last = { grade: g, answer: text.trim(), exact };
     scheduleSave();
     renderTools();
     renderBottom();
@@ -700,7 +894,7 @@ async function renderViewer(imgId, mode) {
     });
     bottom.querySelector("#again")?.addEventListener("click", () => setMode("quiz"));
     bottom.querySelector("#retryWrong")?.addEventListener("click", () => {
-      quiz = { order: shuffle(labels.filter((l) => wrongIds.includes(l.id))), i: 0, results: {}, answered: false };
+      quiz = { order: shuffle(labels.filter((l) => wrongIds.includes(l.id))), i: 0, results: {}, answered: false, options: {} };
       renderTools();
       renderBottom();
       renderLabels();
@@ -737,8 +931,11 @@ async function renderViewer(imgId, mode) {
       return;
     }
     const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
-    if (!g.moved && Math.hypot(dx, dy) < 6) return;
-    g.moved = true;
+    if (!g.moved) {
+      if (Math.hypot(dx, dy) < 6) return;
+      g.moved = true;
+      if (mode === "edit" && g.kind !== "bg" && g.id) snap();
+    }
     const l = labels.find((x) => x.id === g.id);
     if (mode === "edit" && l && g.kind === "lbl") {
       l.x = clamp(g.l0.x + dx / (baseW * view.s), 0, 1);
@@ -789,10 +986,16 @@ async function renderViewer(imgId, mode) {
         x: clamp(p.x + 0.06, 0.08, 0.92), y: clamp(p.y + (up ? -0.14 : 0.14), 0.05, 0.95),
         tx: p.x, ty: p.y, ok: 0, fail: 0,
       };
+      snap();
       labels.push(l);
-      select(l.id);
+      select(l.id, true, true);
     } else if (mode === "study" && gg.kind === "lbl") {
-      revealed.has(gg.id) ? revealed.delete(gg.id) : revealed.add(gg.id);
+      if (revealed.has(gg.id)) revealed.delete(gg.id);
+      else {
+        revealed.add(gg.id);
+        const note = labels.find((x) => x.id === gg.id)?.note?.trim();
+        if (note) toast(`💡 ${note}`, 3500);
+      }
       renderTools();
       renderLabels();
     }
