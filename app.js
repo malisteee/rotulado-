@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=5";
+import { db, isDemo, localDb } from "./db.js?v=6";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -472,14 +472,17 @@ async function renderDeck(deckId) {
   $app.querySelector("#hard").onclick = () => go(`#/deck/${deckId}/study/hard`);
   $app.querySelector("#file").onchange = async (e) => {
     const files = [...e.target.files];
+    e.target.value = "";
     if (!files.length) return;
+    const names = await askNames(files);
+    if (!names) return;
     const up = $app.querySelector("#up");
     let last;
     for (let i = 0; i < files.length; i++) {
       up.textContent = `Subiendo ${i + 1} de ${files.length}…`;
       try {
         const { blob, w, h } = await compressImage(files[i]);
-        last = await db.uploadImage(deckId, blob, files[i].name.replace(/\.[^.]+$/, ""), w, h);
+        last = await db.uploadImage(deckId, blob, names[i], w, h);
       } catch (err) {
         console.error(err);
         toast(`No se pudo subir ${files[i].name}`);
@@ -489,6 +492,49 @@ async function renderDeck(deckId) {
     if (files.length === 1 && last) go(`#/img/${last.id}/edit`);
     else route();
   };
+}
+
+// Ventana para ponerle nombre a cada radiografía antes de subirla
+function askNames(files) {
+  return new Promise((resolve) => {
+    const urls = files.map((f) => URL.createObjectURL(f));
+    const m = document.createElement("div");
+    m.className = "modal";
+    m.innerHTML = `
+      <form class="modal-card">
+        <h3>${files.length === 1 ? "¿Cómo se llama esta radiografía?" : `Ponle nombre a tus ${files.length} radiografías`}</h3>
+        <div class="name-list">${files.map((f, i) => `
+          <label class="name-row">
+            <img src="${urls[i]}" alt="" />
+            <input class="input" name="n${i}" placeholder="Ej: Codo lateral" autocomplete="off" enterkeyhint="${i === files.length - 1 ? "done" : "next"}" />
+          </label>`).join("")}</div>
+        <div class="row" style="justify-content:flex-end">
+          <button type="button" class="btn ghost" id="cancel">Cancelar</button>
+          <button type="submit" class="btn primary">Subir</button>
+        </div>
+      </form>`;
+    document.body.appendChild(m);
+    const inputs = [...m.querySelectorAll("input")];
+    inputs.forEach((inp, i) =>
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && i < inputs.length - 1) {
+          e.preventDefault();
+          inputs[i + 1].focus();
+        }
+      })
+    );
+    const close = (val) => {
+      urls.forEach(URL.revokeObjectURL);
+      m.remove();
+      resolve(val);
+    };
+    m.querySelector("#cancel").onclick = () => close(null);
+    m.querySelector("form").onsubmit = (e) => {
+      e.preventDefault();
+      close(inputs.map((inp, i) => inp.value.trim() || (files.length === 1 ? "Radiografía" : `Radiografía ${i + 1}`)));
+    };
+    setTimeout(() => inputs[0].focus(), 50);
+  });
 }
 
 async function startDeckStudy(deckId, hardOnly) {
@@ -525,7 +571,7 @@ async function renderViewer(imgId, mode) {
   <div class="viewer">
     <div class="vbar">
       <button class="icon-btn" id="back" aria-label="Volver">←</button>
-      <input class="title" id="title" value="${esc(img.title || "")}" placeholder="Título (ej: Codo lateral)" />
+      <input class="title" id="title" value="${esc(img.title || "")}" placeholder="✎ Nombre (ej: Codo lateral)" />
       <div class="seg" id="seg">
         <button data-m="edit">Editar</button><button data-m="study">Estudiar</button><button data-m="quiz">Quiz</button>
       </div>
