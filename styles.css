@@ -291,3 +291,4 @@ a.pill { color: var(--text); text-decoration: none; background: var(--accent-sof
 .name-row { display: flex; gap: 12px; align-items: center; }
 .name-row img { width: 72px; height: 56px; object-fit: cover; border-radius: 10px; background: #1b1a22; flex: none; }
 .vbar .title { background: var(--panel-2); padding: 6px 10px; }
+.tools .warn { font-size: 13px; font-weight: 700; color: #a8612a; background: #fde9d9; padding: 6px 10px; border-radius: 10px; white-space: nowrap; }

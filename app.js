@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=7";
+import { db, isDemo, localDb } from "./db.js?v=8";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -696,27 +696,131 @@ async function renderViewer(imgId, mode) {
       ${mode === "edit" && l.tx != null ? `<div class="tip" data-id="${l.id}" style="left:${l.tx * 100}%;top:${l.ty * 100}%"></div>` : ""}`).join("");
     drawArrows();
   }
+  /* ---------- Geometría: rótulos sin líneas cruzadas ---------- */
+  const PAD = () => fs * 0.15;
+  function sizeOf(l) {
+    const el = lbls.querySelector(`.lbl[data-id="${l.id}"]`);
+    if (el && el.offsetWidth) return { w: el.offsetWidth, h: el.offsetHeight };
+    const n = Math.max((l.text || "").trim().length, 8);
+    return { w: fs * (0.62 * n + 1), h: fs * 1.45 };
+  }
+  function rectAt(cx, cy, sz) {
+    const p = PAD();
+    return { x1: cx - sz.w / 2 - p, y1: cy - sz.h / 2 - p, x2: cx + sz.w / 2 + p, y2: cy + sz.h / 2 + p };
+  }
+  // Tramo visible de la flecha: desde el borde del rótulo hasta la punta
+  function segFrom(cx, cy, sz, l) {
+    if (l.tx == null) return null;
+    const ex = l.tx * baseW, ey = l.ty * baseH, dx = ex - cx, dy = ey - cy;
+    const w = sz.w / 2 + PAD(), h = sz.h / 2 + PAD();
+    const t = Math.min(dx ? w / Math.abs(dx) : Infinity, dy ? h / Math.abs(dy) : Infinity);
+    if (t >= 1 || Math.hypot(dx, dy) < 1) return null;
+    return { ax: cx + dx * t, ay: cy + dy * t, bx: ex, by: ey };
+  }
+  const geom = (l, cx = l.x * baseW, cy = l.y * baseH) => {
+    const sz = sizeOf(l);
+    return { l, rect: rectAt(cx, cy, sz), seg: segFrom(cx, cy, sz, l) };
+  };
+  const cross = (ax, ay, bx, by, cx, cy) => (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  function segsCross(s, t) {
+    const d1 = cross(s.ax, s.ay, s.bx, s.by, t.ax, t.ay), d2 = cross(s.ax, s.ay, s.bx, s.by, t.bx, t.by);
+    const d3 = cross(t.ax, t.ay, t.bx, t.by, s.ax, s.ay), d4 = cross(t.ax, t.ay, t.bx, t.by, s.bx, s.by);
+    return d1 * d2 < 0 && d3 * d4 < 0;
+  }
+  const inRect = (x, y, r) => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2;
+  function segHitsRect(s, r) {
+    if (inRect(s.ax, s.ay, r) || inRect(s.bx, s.by, r)) return true;
+    const e = [[r.x1, r.y1, r.x2, r.y1], [r.x2, r.y1, r.x2, r.y2], [r.x2, r.y2, r.x1, r.y2], [r.x1, r.y2, r.x1, r.y1]];
+    return e.some(([ax, ay, bx, by]) => segsCross(s, { ax, ay, bx, by }));
+  }
+  const overlap = (a, b) => Math.max(0, Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1)) * Math.max(0, Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1));
+  // Puntaje de una posición: cruces, rótulos encimados, flechas que atraviesan rótulos, etc. (menos es mejor)
+  function scoreOf(g, others) {
+    let sc = 0;
+    const r = g.rect, m = fs * 0.2;
+    if (r.x1 < m || r.y1 < m || r.x2 > baseW - m || r.y2 > baseH - m) sc += 5000;
+    for (const o of others) {
+      if (g.seg && o.seg && segsCross(g.seg, o.seg)) sc += 1000;
+      if (g.seg && segHitsRect(g.seg, o.rect)) sc += 600;
+      if (o.seg && segHitsRect(o.seg, r)) sc += 600;
+      const ov = overlap(r, o.rect);
+      if (ov) sc += 800 + ov / (fs * fs) * 50;
+      const ol = o.l;
+      if (ol.tx != null && inRect(ol.tx * baseW, ol.ty * baseH, r)) sc += 700; // tapa el punto señalado de otro
+    }
+    if (g.seg) sc += Math.hypot(g.seg.bx - g.seg.ax, g.seg.by - g.seg.ay) / fs; // preferir flechas cortas
+    return sc;
+  }
+  // Busca la mejor posición para el rótulo alrededor de su punta
+  function placeSmart(l) {
+    if (l.tx == null || !baseW) return;
+    const others = labels.filter((o) => o !== l && ((o.text || "").trim() || o.id === sel)).map((o) => geom(o));
+    const ex = l.tx * baseW, ey = l.ty * baseH, sz = sizeOf(l), base = Math.min(baseW, baseH);
+    let best = null;
+    for (const f of [0.09, 0.13, 0.18, 0.24, 0.31, 0.4]) {
+      for (let k = 0; k < 24; k++) {
+        const a = (k / 24) * Math.PI * 2;
+        const cx = ex + Math.cos(a) * (base * f + sz.w / 2 * Math.abs(Math.cos(a)));
+        const cy = ey + Math.sin(a) * (base * f + sz.h / 2 * Math.abs(Math.sin(a)));
+        const g = { l, rect: rectAt(cx, cy, sz), seg: segFrom(cx, cy, sz, l) };
+        if (!g.seg) continue;
+        const sc = scoreOf(g, others) + f * 3;
+        if (!best || sc < best.sc) best = { sc, cx, cy };
+      }
+    }
+    if (best) {
+      l.x = clamp(best.cx / baseW, 0, 1);
+      l.y = clamp(best.cy / baseH, 0, 1);
+    }
+  }
+  function countProblems() {
+    const gs = withText(labels).map((l) => geom(l));
+    let n = 0;
+    for (let i = 0; i < gs.length; i++)
+      for (let j = i + 1; j < gs.length; j++) {
+        const a = gs[i], b = gs[j];
+        if ((a.seg && b.seg && segsCross(a.seg, b.seg)) || (a.seg && segHitsRect(a.seg, b.rect)) || (b.seg && segHitsRect(b.seg, a.rect)) || overlap(a.rect, b.rect)) n++;
+      }
+    return n;
+  }
+  // Reordena todos los rótulos (varios intentos, se queda con el mejor)
+  function tidyAll() {
+    const movable = withText(labels).filter((l) => l.tx != null);
+    if (!movable.length) return toast("Primero agrega rótulos con flecha");
+    snap();
+    const save = () => labels.map((l) => [l.x, l.y]);
+    let best = { n: countProblems(), pos: save() };
+    for (let pass = 0; pass < 6 && best.n > 0; pass++) {
+      for (const l of shuffle(movable)) placeSmart(l);
+      for (const l of shuffle(movable)) placeSmart(l);
+      const n = countProblems();
+      if (n < best.n) best = { n, pos: save() };
+    }
+    labels.forEach((l, i) => ([l.x, l.y] = best.pos[i]));
+    renderLabels();
+    renderTools();
+    scheduleSave();
+    toast(best.n ? `Quedan ${best.n} cruce(s): muévelos a mano o prueba otra vez` : "¡Listo! Ninguna línea se cruza ✓");
+  }
+
   function drawArrows() {
     if (!baseW) return;
     const shown = mode === "edit" ? labels : withText(labels);
     const sw = Math.max(fs * 0.09, 1.5), hl = fs * 0.55;
     svg.innerHTML = shown.filter((l) => l.tx != null).map((l) => {
-      const el = lbls.querySelector(`.lbl[data-id="${l.id}"]`);
-      if (!el) return "";
-      const cx = l.x * baseW, cy = l.y * baseH, ex = l.tx * baseW, ey = l.ty * baseH;
-      const w = el.offsetWidth / 2 + fs * 0.15, h = el.offsetHeight / 2 + fs * 0.15;
-      const dx = ex - cx, dy = ey - cy;
-      const len = Math.hypot(dx, dy);
-      if (len < 1) return "";
-      const t = Math.min(dx ? w / Math.abs(dx) : Infinity, dy ? h / Math.abs(dy) : Infinity);
-      if (t >= 1) return ""; // la punta queda dentro del rótulo
-      const sx = cx + dx * t, sy = cy + dy * t;
-      const ux = dx / len, uy = dy / len, a = 0.45;
+      if (!lbls.querySelector(`.lbl[data-id="${l.id}"]`)) return "";
+      const sg = geom(l).seg;
+      if (!sg) return "";
+      const { ax: sx, ay: sy, bx: ex, by: ey } = sg;
+      const len = Math.hypot(ex - sx, ey - sy);
+      const ux = (ex - sx) / len, uy = (ey - sy) / len, a = 0.45;
       const h1x = ex - hl * (ux * Math.cos(a) - uy * Math.sin(a)), h1y = ey - hl * (uy * Math.cos(a) + ux * Math.sin(a));
       const h2x = ex - hl * (ux * Math.cos(a) + uy * Math.sin(a)), h2y = ey - hl * (uy * Math.cos(a) - ux * Math.sin(a));
-      return `<path d="M${sx},${sy} L${ex},${ey} M${h1x},${h1y} L${ex},${ey} L${h2x},${h2y}"
-        stroke="${l.color}" stroke-width="${sw}" fill="none" stroke-linecap="round" stroke-linejoin="round"
-        style="filter:drop-shadow(0 0 ${sw}px rgba(0,0,0,.7))"/>`;
+      const d = `M${sx},${sy} L${ex},${ey} M${h1x},${h1y} L${ex},${ey} L${h2x},${h2y}`;
+      const w = l.id === sel ? sw * 1.8 : sw;
+      // borde oscuro debajo para que cada línea se distinga sobre la radiografía
+      return `<path d="${d}" stroke="rgba(0,0,0,.6)" stroke-width="${w * 2.4}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="${d}" stroke="${l.color}" stroke-width="${w}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
     }).join("");
   }
   const updateLabelEl = (l) => {
@@ -754,6 +858,8 @@ async function renderViewer(imgId, mode) {
     if (mode === "edit") {
       tools.innerHTML = `
         <span class="hint">👆 Toca la estructura para poner un rótulo · arrastra el rótulo o la punta ⚪ para moverlos</span>
+        ${(() => { const n = baseW ? countProblems() : 0; return n ? `<span class="warn">⚠️ ${n} cruce${n === 1 ? "" : "s"}</span>` : ""; })()}
+        <button class="btn small" id="tidy">🪄 Ordenar rótulos</button>
         <button class="btn small" id="undo" ${undoStack.length ? "" : "disabled"}>↶ Deshacer</button>
         <label class="size">Aa <input type="range" id="size" min="0.5" max="2" step="0.1" value="${labelSize}" /></label>
         <select id="move" aria-label="Mover a carpeta">
@@ -761,6 +867,7 @@ async function renderViewer(imgId, mode) {
         </select>
         <button class="btn small danger" id="delImg">🗑 Borrar imagen</button>`;
       tools.querySelector("#undo").onclick = undo;
+      tools.querySelector("#tidy").onclick = tidyAll;
       tools.querySelector("#move").onchange = async (e) => {
         const to = allDecks.find((d) => d.id === e.target.value);
         try {
@@ -856,7 +963,13 @@ async function renderViewer(imgId, mode) {
     sel = null;
     if (l && !(l.text || "").trim()) labels.splice(labels.indexOf(l), 1);
     renderLabels();
+    if (l?.auto && (l.text || "").trim()) {
+      placeSmart(l); // ya sabemos el largo del texto: reubicar sin cruces
+      renderLabels();
+    }
+    if (l) delete l.auto;
     renderBottom();
+    renderTools();
     scheduleSave();
   }
   function renderBottom(focus) {
@@ -1126,6 +1239,7 @@ async function renderViewer(imgId, mode) {
     if (mode === "edit" && l && g.kind === "lbl") {
       l.x = clamp(g.l0.x + dx / (baseW * view.s), 0, 1);
       l.y = clamp(g.l0.y + dy / (baseH * view.s), 0, 1);
+      delete l.auto;
       updateLabelEl(l);
     } else if (mode === "edit" && l && g.kind === "tip") {
       l.tx = clamp(g.l0.tx + dx / (baseW * view.s), 0, 1);
@@ -1146,7 +1260,10 @@ async function renderViewer(imgId, mode) {
       return;
     }
     if (e.type === "pointerup" && !g.moved) onTap(g, e);
-    else if (g.moved && mode === "edit" && g.kind !== "bg") scheduleSave();
+    else if (g.moved && mode === "edit" && g.kind !== "bg") {
+      scheduleSave();
+      renderTools();
+    }
     g = null;
   };
   stage.addEventListener("pointerup", end);
@@ -1166,13 +1283,13 @@ async function renderViewer(imgId, mode) {
       if (sel) return deselect();
       const p = toNorm(e.clientX, e.clientY);
       if (p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1) return;
-      const up = p.y > 0.2;
       const l = {
         id: newId(), text: "", color: lastColor,
-        x: clamp(p.x + 0.06, 0.08, 0.92), y: clamp(p.y + (up ? -0.14 : 0.14), 0.05, 0.95),
-        tx: p.x, ty: p.y, ok: 0, fail: 0,
+        x: clamp(p.x + 0.06, 0.08, 0.92), y: clamp(p.y + (p.y > 0.2 ? -0.14 : 0.14), 0.05, 0.95),
+        tx: p.x, ty: p.y, ok: 0, fail: 0, auto: true,
       };
       snap();
+      placeSmart(l);
       labels.push(l);
       select(l.id, true, true);
     } else if (mode === "study" && gg.kind === "lbl") {
@@ -1194,6 +1311,7 @@ async function renderViewer(imgId, mode) {
   if (!imEl.complete) await new Promise((r) => { imEl.onload = r; imEl.onerror = r; });
   setMode(mode);
   fit();
+  if (mode === "edit") renderTools();
   if (document.fonts?.ready) document.fonts.ready.then(drawArrows);
 
   cleanup = async () => {
