@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=8";
+import { db, isDemo, localDb } from "./db.js?v=9";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -83,7 +83,10 @@ function grade(answer, correct) {
 // Estado de aprendizaje de cada rótulo
 const isHard = (l) => (l.fail || 0) > 0 && (l.last === false || (l.fail || 0) > (l.ok || 0));
 const isKnown = (l) => l.last === true;
-const withText = (labels) => (labels || []).filter((l) => (l.text || "").trim());
+// "Dudas": estructuras anotadas que todavía no sabes ubicar (se guardan junto a los rótulos)
+const isTodo = (l) => l.kind === "todo";
+const todosOf = (labels) => (labels || []).filter(isTodo);
+const withText = (labels) => (labels || []).filter((l) => !isTodo(l) && (l.text || "").trim());
 function deckStats(images) {
   const labels = images.flatMap((i) => withText(i.labels));
   const known = labels.filter(isKnown).length;
@@ -133,6 +136,7 @@ async function route() {
     else if (parts[0] === "deck" && parts[1]) await renderDeck(parts[1]);
     else if (parts[0] === "img" && parts[1]) await renderViewer(parts[1], parts[2] || "edit");
     else if (parts[0] === "progreso") await renderProgress();
+    else if (parts[0] === "dudas") await renderTodos();
     else if (parts[0] === "cuenta") await renderAccount();
     else await renderHome();
   } catch (e) {
@@ -207,6 +211,7 @@ function frame(decks, active, content) {
     <nav>
       <a href="#/" class="${active === "home" ? "on" : ""}">🏠 Inicio</a>
       <a href="#/progreso" class="${active === "progress" ? "on" : ""}">📊 Mi progreso</a>
+      <a href="#/dudas" class="${active === "todos" ? "on" : ""}">📝 Dudas para clase${(() => { const n = decks.reduce((k, d) => k + d.images.reduce((j, im) => j + todosOf(im.labels).length, 0), 0); return n ? `<small>${n}</small>` : ""; })()}</a>
       <a href="#/cuenta" class="${active === "account" ? "on" : ""}">👤 Mi cuenta</a>
     </nav>
     <div class="side-h">Mis carpetas</div>
@@ -330,6 +335,42 @@ async function renderProgress() {
     : `<div class="empty"><div class="big">📊</div><p>Aquí verás tu avance cuando rotules imágenes y hagas el <b>Quiz</b>.</p></div>`}
   </div>`);
   wireFrame();
+}
+
+/* ---------- Dudas para clase (todas las radiografías) ---------- */
+async function renderTodos() {
+  const decks = await db.listDecks();
+  const groups = decks.flatMap((d) => d.images.filter((im) => todosOf(im.labels).length).map((im) => ({ d, im })));
+  $app.innerHTML = frame(decks, "todos", `
+  <div class="page">
+    <div class="topbar">${menuBtn}<h1>Dudas para clase</h1></div>
+    <p class="muted" style="margin-top:-8px">Estructuras que anotaste porque no sabías dónde estaban. Llévalas a clase y, cuando sepas, ábrelas y toca <b>📍 Ubicar</b>.</p>
+    ${groups.length ? groups.map(({ d, im }) => `
+      <div class="box">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px">
+          <span><b>${esc(im.title || "Sin título")}</b> <small class="muted">· 📁 ${esc(d.name)}</small></span>
+          <a class="btn small" href="#/img/${im.id}/edit">Abrir radiografía →</a>
+        </div>
+        ${todosOf(im.labels).map((t) => `
+          <div class="todo-item">
+            <span class="ell">❓ ${esc(t.text)}</span>
+            <button class="btn small ghost" data-img="${im.id}" data-del="${t.id}">✓ Resuelta</button>
+          </div>`).join("")}
+      </div>`).join("")
+    : `<div class="empty"><div class="big">📝</div><p>No tienes dudas anotadas. Cuando rotules y no sepas dónde está algo, tócalo en <b>📝 Dudas</b> dentro de la radiografía.</p></div>`}
+  </div>`);
+  wireFrame();
+  $app.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+    const im = groups.find((g) => g.im.id === b.dataset.img).im;
+    b.disabled = true;
+    try {
+      await db.updateImage(im.id, { labels: im.labels.filter((l) => l.id !== b.dataset.del) });
+      route();
+    } catch {
+      toast("No se pudo guardar");
+      b.disabled = false;
+    }
+  }));
 }
 
 /* ---------- Mi cuenta ---------- */
@@ -462,7 +503,7 @@ async function renderDeck(deckId) {
       return `<button class="thumb" data-id="${im.id}">
         <div class="ph" style="background-image:url('${esc(urls[i])}')"></div>
         <div class="meta"><b>${esc(im.title || "Sin título")}</b>
-        <small>${ls.length} rótulo${ls.length === 1 ? "" : "s"}${hard ? ` · <i class="dot"></i>${hard}` : ""}</small></div>
+        <small>${ls.length} rótulo${ls.length === 1 ? "" : "s"}${hard ? ` · <i class="dot"></i>${hard}` : ""}${todosOf(im.labels).length ? ` · 📝 ${todosOf(im.labels).length}` : ""}</small></div>
       </button>`;
     }).join("")}</div>`
     : `<div class="empty"><div class="big">🩻</div><p>Sube tus radiografías (puedes elegir varias a la vez).</p></div>`}
@@ -575,7 +616,11 @@ async function renderViewer(imgId, mode) {
   let quizType = pref.get("quizType", "write"); // write | choice
   const undoStack = []; // deshacer
   let preEdit = null;
-  const labels = (img.labels || []).map((l) => ({ ...l }));
+  const allLabels = (img.labels || []).map((l) => ({ ...l }));
+  const labels = allLabels.filter((l) => !isTodo(l));
+  const todos = allLabels.filter(isTodo);
+  let placing = null; // duda que estás ubicando en la imagen
+  let todoOpen = false;
   let labelSize = img.label_size || 1;
   if (session && session.ids[session.idx] !== imgId) session = null;
   if (!["edit", "study", "quiz"].includes(mode)) mode = "edit";
@@ -600,6 +645,7 @@ async function renderViewer(imgId, mode) {
       <button class="btn small zoom-reset" id="zoomReset" hidden>Ajustar ⤢</button>
     </div>
     <div id="bottom"></div>
+    <div id="todoPanel"></div>
   </div>`;
 
   const $ = (s) => $app.querySelector(s);
@@ -624,7 +670,7 @@ async function renderViewer(imgId, mode) {
     try {
       await db.updateImage(img.id, {
         title: titleVal.trim(),
-        labels: labels.filter((l) => (l.text || "").trim() || l.id === sel),
+        labels: [...labels.filter((l) => (l.text || "").trim() || l.id === sel), ...todos],
         label_size: labelSize,
       });
       setSave("Guardado ✓");
@@ -837,12 +883,14 @@ async function renderViewer(imgId, mode) {
     mode = m;
     history.replaceState(null, "", `#/img/${img.id}/${m}`);
     $("#seg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
+    if (m !== "edit") placing = null;
     if (m === "study") revealed.clear();
     if (m === "quiz") startQuiz();
     else quiz = null;
     renderTools();
     renderBottom();
     renderLabels();
+    renderTodo();
   }
   $("#seg").onclick = (e) => {
     const m = e.target.closest("button")?.dataset.m;
@@ -857,7 +905,10 @@ async function renderViewer(imgId, mode) {
   function renderTools() {
     if (mode === "edit") {
       tools.innerHTML = `
-        <span class="hint">👆 Toca la estructura para poner un rótulo · arrastra el rótulo o la punta ⚪ para moverlos</span>
+        ${placing ? `<span class="hint placing">📍 Toca en la imagen dónde está <b>“${esc(todos.find((t) => t.id === placing)?.text)}”</b></span>
+          <button class="btn small" id="cancelPlace">Cancelar</button>`
+        : `<span class="hint">👆 Toca la estructura para poner un rótulo · arrastra el rótulo o la punta ⚪ para moverlos</span>`}
+        <button class="btn small ${todos.length ? "sky" : ""}" id="todoBtn">📝 Dudas${todos.length ? ` (${todos.length})` : ""}</button>
         ${(() => { const n = baseW ? countProblems() : 0; return n ? `<span class="warn">⚠️ ${n} cruce${n === 1 ? "" : "s"}</span>` : ""; })()}
         <button class="btn small" id="tidy">🪄 Ordenar rótulos</button>
         <button class="btn small" id="undo" ${undoStack.length ? "" : "disabled"}>↶ Deshacer</button>
@@ -868,6 +919,14 @@ async function renderViewer(imgId, mode) {
         <button class="btn small danger" id="delImg">🗑 Borrar imagen</button>`;
       tools.querySelector("#undo").onclick = undo;
       tools.querySelector("#tidy").onclick = tidyAll;
+      tools.querySelector("#todoBtn").onclick = () => {
+        todoOpen = !todoOpen;
+        renderTodo();
+      };
+      tools.querySelector("#cancelPlace")?.addEventListener("click", () => {
+        placing = null;
+        renderTools();
+      });
       tools.querySelector("#move").onchange = async (e) => {
         const to = allDecks.find((d) => d.id === e.target.value);
         try {
@@ -932,6 +991,51 @@ async function renderViewer(imgId, mode) {
         renderBottom();
       };
     }
+  }
+
+  /* ---------- Dudas para clase ---------- */
+  function renderTodo() {
+    const panel = $("#todoPanel");
+    if (!todoOpen || mode !== "edit") return (panel.innerHTML = "");
+    panel.innerHTML = `
+      <div class="todo-panel">
+        <div class="row" style="justify-content:space-between"><b>📝 Dudas para clase</b>
+          <button class="icon-btn" id="todoClose" aria-label="Cerrar">✕</button></div>
+        <p class="muted" style="margin:0;font-size:14px">Anota las estructuras que no sabes dónde están para preguntarlas en clase. Cuando lo sepas, toca <b>📍 Ubicar</b>.</p>
+        <form id="todoForm" class="row" style="flex-wrap:nowrap">
+          <input class="input" id="todoIn" placeholder="Ej: Apófisis coracoides" autocomplete="off" enterkeyhint="done" />
+          <button class="btn primary" type="submit">Anotar</button>
+        </form>
+        <div class="todo-list">${todos.length ? todos.map((t) => `
+          <div class="todo-item">
+            <span class="ell">❓ ${esc(t.text)}</span>
+            <button class="btn small" data-place="${t.id}">📍 Ubicar</button>
+            <button class="btn small ghost" data-del="${t.id}" aria-label="Borrar">✕</button>
+          </div>`).join("") : `<p class="muted" style="font-size:14px">No tienes dudas en esta radiografía 🎉</p>`}</div>
+      </div>`;
+    panel.querySelector("#todoClose").onclick = () => { todoOpen = false; renderTodo(); };
+    panel.querySelector("#todoForm").onsubmit = (e) => {
+      e.preventDefault();
+      const v = panel.querySelector("#todoIn").value.trim();
+      if (!v) return;
+      todos.push({ id: newId(), kind: "todo", text: v, created: todayStr() });
+      scheduleSave();
+      renderTodo();
+      renderTools();
+    };
+    panel.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
+      todos.splice(todos.findIndex((t) => t.id === b.dataset.del), 1);
+      scheduleSave();
+      renderTodo();
+      renderTools();
+    }));
+    panel.querySelectorAll("[data-place]").forEach((b) => (b.onclick = () => {
+      if (sel) deselect();
+      placing = b.dataset.place;
+      todoOpen = false;
+      renderTodo();
+      renderTools();
+    }));
   }
 
   /* ---------- Hoja de edición del rótulo ---------- */
@@ -1283,15 +1387,22 @@ async function renderViewer(imgId, mode) {
       if (sel) return deselect();
       const p = toNorm(e.clientX, e.clientY);
       if (p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1) return;
+      const todo = placing && todos.find((t) => t.id === placing);
       const l = {
-        id: newId(), text: "", color: lastColor,
+        id: newId(), text: todo ? todo.text : "", color: lastColor,
         x: clamp(p.x + 0.06, 0.08, 0.92), y: clamp(p.y + (p.y > 0.2 ? -0.14 : 0.14), 0.05, 0.95),
         tx: p.x, ty: p.y, ok: 0, fail: 0, auto: true,
       };
       snap();
       placeSmart(l);
       labels.push(l);
-      select(l.id, true, true);
+      if (todo) {
+        todos.splice(todos.indexOf(todo), 1);
+        placing = null;
+        renderTools();
+        toast(`¡Ubicado “${todo.text}”! ✓`);
+      }
+      select(l.id, !todo, true);
     } else if (mode === "study" && gg.kind === "lbl") {
       if (revealed.has(gg.id)) revealed.delete(gg.id);
       else {

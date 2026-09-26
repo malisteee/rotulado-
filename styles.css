@@ -292,3 +292,21 @@ a.pill { color: var(--text); text-decoration: none; background: var(--accent-sof
 .name-row img { width: 72px; height: 56px; object-fit: cover; border-radius: 10px; background: #1b1a22; flex: none; }
 .vbar .title { background: var(--panel-2); padding: 6px 10px; }
 .tools .warn { font-size: 13px; font-weight: 700; color: #a8612a; background: #fde9d9; padding: 6px 10px; border-radius: 10px; white-space: nowrap; }
+
+/* ---------- Dudas para clase ---------- */
+.todo-panel {
+  position: absolute; right: 12px; top: 120px; z-index: 15; width: min(360px, calc(100% - 24px));
+  max-height: calc(100% - 140px); overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 14px;
+  display: grid; gap: 10px; box-shadow: 0 14px 40px rgba(60, 40, 80, .22);
+}
+.viewer { position: fixed; }
+.todo-list { display: grid; gap: 6px; }
+.todo-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border-radius: 12px;
+  background: var(--panel-2);
+}
+.todo-item + .todo-item { margin-top: 6px; }
+.todo-item .ell { flex: 1; }
+.tools .hint.placing { color: #24497a; background: #dcebff; padding: 6px 10px; border-radius: 10px; }
+.side a small { margin-left: auto; }
