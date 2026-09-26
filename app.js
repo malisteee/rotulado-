@@ -1,4 +1,4 @@
-import { db, isDemo } from "./db.js";
+import { db, isDemo } from "./db.js?v=3";
 
 /* ================================================================== */
 /* Utilidades                                                          */
