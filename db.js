@@ -1,5 +1,5 @@
 // Capa de datos: Supabase (en línea, con cuentas) o modo prueba local (IndexedDB).
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=9";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=10";
 
 export const isDemo = !SUPABASE_URL || !SUPABASE_ANON_KEY;
 const BUCKET = "radiografias";
@@ -98,6 +98,21 @@ function supabaseBackend() {
       await sb.storage.from(BUCKET).remove([img.path]);
       must(await sb.from("images").delete().eq("id", img.id));
     },
+    async listVocab() {
+      return must(await sb.from("vocab_decks").select("*").order("created_at"));
+    },
+    async getVocab(id) {
+      return must(await sb.from("vocab_decks").select("*").eq("id", id).single());
+    },
+    async createVocab(name, cards = []) {
+      return must(await sb.from("vocab_decks").insert({ name, cards }).select().single());
+    },
+    async updateVocab(id, patch) {
+      must(await sb.from("vocab_decks").update(patch).eq("id", id));
+    },
+    async deleteVocab(id) {
+      must(await sb.from("vocab_decks").delete().eq("id", id));
+    },
     async imageUrls(imgs) {
       const now = Date.now();
       const missing = imgs.filter((i) => !(urlCache.get(i.path)?.exp > now)).map((i) => i.path);
@@ -118,12 +133,14 @@ function localBackend() {
   const blobUrls = new Map();
   const open = () =>
     (dbp ??= new Promise((res, rej) => {
-      const r = indexedDB.open("rotulado-demo", 1);
+      const r = indexedDB.open("rotulado-demo", 2);
       r.onupgradeneeded = () => {
         const db = r.result;
-        db.createObjectStore("decks", { keyPath: "id" });
-        db.createObjectStore("images", { keyPath: "id" });
-        db.createObjectStore("blobs");
+        const has = (n) => db.objectStoreNames.contains(n);
+        if (!has("decks")) db.createObjectStore("decks", { keyPath: "id" });
+        if (!has("images")) db.createObjectStore("images", { keyPath: "id" });
+        if (!has("blobs")) db.createObjectStore("blobs");
+        if (!has("vocab")) db.createObjectStore("vocab", { keyPath: "id" });
       };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
@@ -212,6 +229,26 @@ function localBackend() {
     async deleteImage(img) {
       await del("blobs", img.path);
       await del("images", img.id);
+    },
+    async listVocab() {
+      return (await all("vocab")).sort(byDate);
+    },
+    async getVocab(id) {
+      const v = await get("vocab", id);
+      if (!v) throw new Error("Mazo no encontrado");
+      return v;
+    },
+    async createVocab(name, cards = []) {
+      const v = { id: uid(), name, cards, created_at: new Date().toISOString() };
+      await put("vocab", v);
+      return v;
+    },
+    async updateVocab(id, patch) {
+      const v = await get("vocab", id);
+      await put("vocab", { ...v, ...patch });
+    },
+    async deleteVocab(id) {
+      await del("vocab", id);
     },
     async imageUrls(imgs) {
       const out = [];

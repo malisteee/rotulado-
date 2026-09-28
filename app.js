@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=9";
+import { db, isDemo, localDb } from "./db.js?v=10";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -137,6 +137,9 @@ async function route() {
     else if (parts[0] === "img" && parts[1]) await renderViewer(parts[1], parts[2] || "edit");
     else if (parts[0] === "progreso") await renderProgress();
     else if (parts[0] === "dudas") await renderTodos();
+    else if (parts[0] === "vocab" && parts[1] && parts[2]) await renderVocabStudy(parts[1], parts[2], parts[3] === "hard");
+    else if (parts[0] === "vocab" && parts[1]) await renderVocabDeck(parts[1]);
+    else if (parts[0] === "vocab") await renderVocabHome();
     else if (parts[0] === "cuenta") await renderAccount();
     else await renderHome();
   } catch (e) {
@@ -211,6 +214,7 @@ function frame(decks, active, content) {
     <nav>
       <a href="#/" class="${active === "home" ? "on" : ""}">🏠 Inicio</a>
       <a href="#/progreso" class="${active === "progress" ? "on" : ""}">📊 Mi progreso</a>
+      <a href="#/vocab" class="${active === "vocab" ? "on" : ""}">📖 Vocabulario</a>
       <a href="#/dudas" class="${active === "todos" ? "on" : ""}">📝 Dudas para clase${(() => { const n = decks.reduce((k, d) => k + d.images.reduce((j, im) => j + todosOf(im.labels).length, 0), 0); return n ? `<small>${n}</small>` : ""; })()}</a>
       <a href="#/cuenta" class="${active === "account" ? "on" : ""}">👤 Mi cuenta</a>
     </nav>
@@ -1429,6 +1433,462 @@ async function renderViewer(imgId, mode) {
     removeEventListener("resize", onResize);
     if (saveT) await saveNow();
   };
+}
+
+/* ================================================================== */
+/* Vocabulario                                                         */
+/* ================================================================== */
+const VOCAB_PROMPT = `Te adjunto una presentación (PPT) de mi clase. Necesito aprender su vocabulario técnico.
+
+Extrae TODOS los términos técnicos que aparecen (estructuras anatómicas, términos radiológicos, proyecciones, posiciones, planos, signos, etc.) y escribe para cada uno una definición breve basada en lo que dice la presentación. Si la presentación no define un término, escribe tú una definición corta y correcta y agrega (*) al final.
+
+Responde SOLO con un bloque de código, sin nada antes ni después, con este formato exacto:
+
+# Tema: <título o tema de la presentación>
+Término :: Definición breve
+Término :: Definición breve
+
+Reglas:
+- Una línea por término, usando "::" como separador (solo una vez por línea).
+- Definiciones de máximo 25 palabras, en español.
+- Sin viñetas, sin números, sin negritas.
+- No repitas términos y respeta las tildes.
+- Si la presentación tiene varios temas claramente distintos, usa una línea "# Tema: ..." para cada uno.`;
+
+function parseVocab(text) {
+  const groups = [];
+  let cur = null;
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line || /^```/.test(line)) continue;
+    const h = line.match(/^#+\s*(?:tema\s*:\s*)?(.+)$/i);
+    if (h) {
+      cur = { topic: h[1].replace(/\*+/g, "").trim(), cards: [] };
+      groups.push(cur);
+      continue;
+    }
+    line = line.replace(/^([-*•·]|\d+[.)])\s+/, "").replace(/\*\*/g, "");
+    const i = line.indexOf("::");
+    if (i < 1) continue;
+    const term = line.slice(0, i).trim(), def = line.slice(i + 2).trim();
+    if (!term || !def) continue;
+    if (!cur) groups.push((cur = { topic: "", cards: [] }));
+    cur.cards.push({ term, def });
+  }
+  return groups.filter((g) => g.cards.length);
+}
+function mergeCards(existing, incoming) {
+  const seen = new Set(existing.map((c) => norm(c.term)));
+  let added = 0;
+  for (const c of incoming) {
+    const k = norm(c.term);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    existing.push({ id: newId(), term: c.term, def: c.def, ok: 0, fail: 0 });
+    added++;
+  }
+  return added;
+}
+function cardStats(cards) {
+  const cs = cards || [];
+  const known = cs.filter(isKnown).length;
+  return {
+    n: cs.length, known,
+    hard: cs.filter(isHard).length,
+    today: cs.filter((c) => c.seen === todayStr()).length,
+    pct: cs.length ? Math.round((known / cs.length) * 100) : 0,
+  };
+}
+const vocabMissing = (e) => /vocab_decks|relation|schema cache|does not exist|not find the table/i.test(String(e?.message || e));
+const VOCAB_SQL = `create table if not exists public.vocab_decks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  name text not null,
+  cards jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now()
+);
+alter table public.vocab_decks enable row level security;
+drop policy if exists "vocab: solo el dueño" on public.vocab_decks;
+create policy "vocab: solo el dueño" on public.vocab_decks
+  for all to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());`;
+
+async function copyText(text, okMsg) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(okMsg);
+  } catch {
+    // Si el navegador no deja copiar, mostramos el texto para copiarlo a mano
+    const m = document.createElement("div");
+    m.className = "modal";
+    m.innerHTML = `<div class="modal-card"><h3>Copia este texto</h3>
+      <textarea class="input area" rows="12" readonly>${esc(text)}</textarea>
+      <div class="row" style="justify-content:flex-end"><button class="btn primary">Cerrar</button></div></div>`;
+    document.body.appendChild(m);
+    const ta = m.querySelector("textarea");
+    ta.focus();
+    ta.select();
+    m.querySelector("button").onclick = () => m.remove();
+  }
+}
+const copyPrompt = () => copyText(VOCAB_PROMPT, "Prompt copiado ✓ Pégalo en ChatGPT junto con tu PPT");
+
+// Ventana genérica con campos de texto
+function formModal(title, fields, okLabel = "Guardar") {
+  return new Promise((resolve) => {
+    const m = document.createElement("div");
+    m.className = "modal";
+    m.innerHTML = `<form class="modal-card"><h3>${title}</h3>
+      <div class="name-list">${fields.map((f) => `<label class="flabel">${esc(f.label)}
+        ${f.area ? `<textarea class="input area" name="${f.name}" rows="4">${esc(f.value || "")}</textarea>`
+          : `<input class="input" name="${f.name}" value="${esc(f.value || "")}" autocomplete="off" />`}</label>`).join("")}</div>
+      <div class="row" style="justify-content:flex-end">
+        <button type="button" class="btn ghost" id="cancel">Cancelar</button>
+        <button type="submit" class="btn primary">${okLabel}</button></div></form>`;
+    document.body.appendChild(m);
+    const close = (v) => { m.remove(); resolve(v); };
+    m.querySelector("#cancel").onclick = () => close(null);
+    m.querySelector("form").onsubmit = (e) => {
+      e.preventDefault();
+      close(Object.fromEntries(fields.map((f) => [f.name, e.target[f.name].value.trim()])));
+    };
+    if (canAutoFocus) m.querySelector("input,textarea")?.focus();
+  });
+}
+
+// Importar: pegar lo que respondió ChatGPT
+function openImport(target, allVocab) {
+  const m = document.createElement("div");
+  m.className = "modal";
+  m.innerHTML = `<form class="modal-card">
+    <h3>📥 Importar vocabulario${target ? ` a “${esc(target.name)}”` : ""}</h3>
+    <p class="muted" style="margin:0">Pega aquí la respuesta de ChatGPT (lo que está dentro del recuadro).</p>
+    <textarea class="input area" rows="10" placeholder="# Tema: Densidades radiológicas&#10;Radiolúcido :: Zona que deja pasar los rayos X y se ve oscura"></textarea>
+    <div class="muted" id="prev" style="font-size:14px">Todavía no pegaste nada.</div>
+    <div class="row" style="justify-content:flex-end">
+      <button type="button" class="btn ghost" id="cancel">Cancelar</button>
+      <button type="submit" class="btn primary" disabled>Importar</button></div></form>`;
+  document.body.appendChild(m);
+  const ta = m.querySelector("textarea"), prev = m.querySelector("#prev"), ok = m.querySelector("[type=submit]");
+  let groups = [];
+  ta.oninput = () => {
+    groups = parseVocab(ta.value);
+    const n = groups.reduce((k, g) => k + g.cards.length, 0);
+    ok.disabled = !n;
+    prev.innerHTML = !ta.value.trim() ? "Todavía no pegaste nada."
+      : !n ? `⚠️ No encontré términos. Cada línea debe verse así: <b>Término :: Definición</b>`
+      : `✓ Encontré <b>${n}</b> término${n === 1 ? "" : "s"}${target ? "" : groups.map((g) => `<br>• ${esc(g.topic || "Sin tema")}: ${g.cards.length}`).join("")}`;
+  };
+  m.querySelector("#cancel").onclick = () => m.remove();
+  m.querySelector("form").onsubmit = async (e) => {
+    e.preventDefault();
+    ok.disabled = true;
+    ok.textContent = "Importando…";
+    try {
+      let added = 0, openId = target?.id;
+      if (target) {
+        const fresh = await db.getVocab(target.id);
+        added = mergeCards(fresh.cards, groups.flatMap((g) => g.cards));
+        await db.updateVocab(target.id, { cards: fresh.cards });
+      } else {
+        for (const g of groups) {
+          const name = g.topic || prompt("¿Cómo se llama este tema?", "Vocabulario") || "Vocabulario";
+          const same = allVocab.find((v) => norm(v.name) === norm(name));
+          if (same) {
+            added += mergeCards(same.cards, g.cards);
+            await db.updateVocab(same.id, { cards: same.cards });
+            openId = same.id;
+          } else {
+            const cards = [];
+            added += mergeCards(cards, g.cards);
+            const v = await db.createVocab(name, cards);
+            allVocab.push(v);
+            openId = v.id;
+          }
+        }
+      }
+      m.remove();
+      toast(`✓ ${added} término${added === 1 ? "" : "s"} nuevo${added === 1 ? "" : "s"}`);
+      if (!target && groups.length === 1 && openId) go(`#/vocab/${openId}`);
+      else route();
+    } catch (err) {
+      console.error(err);
+      toast("No se pudo importar. Revisa tu conexión.");
+      ok.disabled = false;
+      ok.textContent = "Importar";
+    }
+  };
+  setTimeout(() => canAutoFocus && ta.focus(), 50);
+}
+
+async function renderVocabHome() {
+  const decks = await db.listDecks();
+  let vs = [], missing = false;
+  try { vs = await db.listVocab(); } catch (e) { if (vocabMissing(e)) missing = true; else throw e; }
+  const tot = cardStats(vs.flatMap((v) => v.cards));
+  $app.innerHTML = frame(decks, "vocab", `
+  <div class="page">
+    <div class="topbar">${menuBtn}<h1>Vocabulario</h1></div>
+    ${missing ? `
+    <div class="box">
+      <h3>🔧 Falta un paso para activar el vocabulario</h3>
+      <p>Hay que crear un espacio nuevo en Supabase, igual que hiciste la primera vez:</p>
+      <p>1. En Supabase abre <b>SQL Editor</b> → <b>New query</b>.<br>2. Pega este texto y toca <b>Run</b> (si sale un aviso rojo, toca <b>Run</b> otra vez).<br>3. Vuelve aquí y recarga la página.</p>
+      <pre class="code">${esc(VOCAB_SQL)}</pre>
+      <button class="btn primary" id="copySql">📋 Copiar texto</button>
+    </div>` : `
+    <div class="row" style="margin-bottom:16px">
+      <button class="btn primary" id="imp">📥 Importar vocabulario</button>
+      <button class="btn" id="prompt">📋 Copiar prompt para ChatGPT</button>
+      <button class="btn" id="newV">＋ Mazo vacío</button>
+    </div>
+    ${tot.n ? `<div class="today">
+      <span class="pill">📖 <b>${tot.n}</b> términos</span>
+      <span class="pill">✅ <b>${tot.known}</b> aprendidos</span>
+      <span class="pill">🔥 Hoy repasaste <b>${tot.today}</b></span>
+      ${tot.hard ? `<span class="pill">🔁 <b>${tot.hard}</b> difíciles</span>` : ""}</div>` : ""}
+    ${vs.length ? `<div class="grid">${vs.map((v) => {
+      const c = cardStats(v.cards);
+      return `<button class="card" data-id="${v.id}"><h3>${esc(v.name)}</h3>
+        <div class="stats"><span>📖 ${c.n} términos</span>${c.hard ? `<span><i class="dot"></i>${c.hard} difíciles</span>` : ""}</div>
+        <div class="stats"><span>${c.pct}% aprendido</span></div><div class="bar"><i style="width:${c.pct}%"></i></div></button>`;
+    }).join("")}</div>` : `
+    <div class="box how">
+      <h3>¿Cómo paso el vocabulario de un PPT?</h3>
+      <ol>
+        <li>Toca <b>📋 Copiar prompt para ChatGPT</b>.</li>
+        <li>En ChatGPT, adjunta tu PPT, pega el prompt y envíalo.</li>
+        <li>Copia lo que te responda (el recuadro con “Término :: Definición”).</li>
+        <li>Vuelve aquí, toca <b>📥 Importar vocabulario</b> y pégalo. ¡Listo! Se crea un mazo con todas las tarjetas.</li>
+      </ol>
+      <p class="muted">Puedes repetirlo con cada PPT nuevo. Si un tema ya existe, los términos nuevos se suman al mismo mazo sin repetirse.</p>
+    </div>`}`}
+  </div>`);
+  wireFrame();
+  $app.querySelector("#copySql")?.addEventListener("click", () => copyText(VOCAB_SQL, "Texto copiado ✓ Pégalo en el SQL Editor de Supabase"));
+  $app.querySelector("#imp")?.addEventListener("click", () => openImport(null, vs));
+  $app.querySelector("#prompt")?.addEventListener("click", copyPrompt);
+  $app.querySelector("#newV")?.addEventListener("click", async () => {
+    const name = prompt("Nombre del mazo (ej: Densidades radiológicas):");
+    if (!name?.trim()) return;
+    const v = await db.createVocab(name.trim(), []);
+    go(`#/vocab/${v.id}`);
+  });
+  $app.querySelectorAll(".card").forEach((c) => (c.onclick = () => go(`#/vocab/${c.dataset.id}`)));
+}
+
+async function renderVocabDeck(id) {
+  const [decks, v] = await Promise.all([db.listDecks(), db.getVocab(id)]);
+  const c = cardStats(v.cards);
+  const row = (x) => `
+    <div class="vrow" data-id="${x.id}">
+      <div class="vtxt"><b>${esc(x.term)}</b><span>${esc(x.def)}</span></div>
+      <small class="muted">${isHard(x) ? `<i class="dot"></i>` : isKnown(x) ? "✅" : ""}</small>
+      <button class="icon-btn sm" data-edit="${x.id}" aria-label="Editar">✎</button>
+      <button class="icon-btn sm" data-del="${x.id}" aria-label="Borrar">✕</button>
+    </div>`;
+  $app.innerHTML = frame(decks, "vocab", `
+  <div class="page">
+    <div class="topbar">${menuBtn}<a class="icon-btn" href="#/vocab" aria-label="Volver">←</a><h1>${esc(v.name)}</h1>
+      <button class="icon-btn" id="ren" aria-label="Renombrar">✎</button>
+      <button class="icon-btn" id="delV" aria-label="Borrar mazo">🗑</button></div>
+    <div class="row" style="margin-bottom:10px">
+      <a class="btn primary ${c.n ? "" : "off"}" href="#/vocab/${id}/cards">🃏 Tarjetas</a>
+      <a class="btn mint ${c.n ? "" : "off"}" href="#/vocab/${id}/quiz">✍️ Quiz</a>
+      <a class="btn ${c.hard ? "" : "off"}" href="#/vocab/${id}/quiz/hard">🔁 Difíciles (${c.hard})</a>
+    </div>
+    <div class="row" style="margin-bottom:14px">
+      <button class="btn small" id="imp">📥 Importar aquí</button>
+      <button class="btn small" id="add">＋ Agregar término</button>
+      <button class="btn small" id="prompt">📋 Copiar prompt</button>
+    </div>
+    <div class="stats" style="margin-bottom:12px"><span>${c.n} términos</span><span>${c.pct}% aprendido</span></div>
+    ${c.n > 6 ? `<input class="input" id="q" placeholder="🔎 Buscar término…" style="margin-bottom:12px" />` : ""}
+    <div class="vlist" id="vlist">${c.n ? v.cards.map(row).join("") : `<div class="empty"><div class="big">📖</div><p>Este mazo está vacío. Importa el vocabulario de un PPT o agrega términos a mano.</p></div>`}</div>
+  </div>`);
+  wireFrame();
+  const save = () => db.updateVocab(id, { cards: v.cards });
+  $app.querySelector("#imp").onclick = () => openImport(v);
+  $app.querySelector("#prompt").onclick = copyPrompt;
+  $app.querySelector("#add").onclick = async () => {
+    const r = await formModal("＋ Agregar término", [{ name: "term", label: "Término" }, { name: "def", label: "Definición", area: true }]);
+    if (!r?.term || !r?.def) return;
+    if (!mergeCards(v.cards, [r])) return toast("Ese término ya está en el mazo");
+    await save();
+    route();
+  };
+  $app.querySelector("#ren").onclick = async () => {
+    const name = prompt("Nuevo nombre:", v.name);
+    if (!name?.trim()) return;
+    await db.updateVocab(id, { name: name.trim() });
+    route();
+  };
+  $app.querySelector("#delV").onclick = async () => {
+    if (!confirm(`¿Borrar el mazo "${v.name}" con sus ${c.n} términos?`)) return;
+    await db.deleteVocab(id);
+    go("#/vocab");
+  };
+  $app.querySelector("#q")?.addEventListener("input", (e) => {
+    const q = norm(e.target.value);
+    $app.querySelectorAll(".vrow").forEach((r) => {
+      const x = v.cards.find((k) => k.id === r.dataset.id);
+      r.hidden = q && !norm(x.term + " " + x.def).includes(q);
+    });
+  });
+  $app.querySelector("#vlist").onclick = async (e) => {
+    const ed = e.target.closest("[data-edit]"), dl = e.target.closest("[data-del]");
+    if (ed) {
+      const x = v.cards.find((k) => k.id === ed.dataset.edit);
+      const r = await formModal("✎ Editar término", [{ name: "term", label: "Término", value: x.term }, { name: "def", label: "Definición", value: x.def, area: true }]);
+      if (!r?.term || !r?.def) return;
+      Object.assign(x, r);
+      await save();
+      route();
+    } else if (dl) {
+      const x = v.cards.find((k) => k.id === dl.dataset.del);
+      if (!confirm(`¿Borrar "${x.term}"?`)) return;
+      v.cards.splice(v.cards.indexOf(x), 1);
+      await save();
+      route();
+    }
+  };
+}
+
+async function renderVocabStudy(id, kind, hardOnly) {
+  const v = await db.getVocab(id);
+  let pool = v.cards.filter((c) => c.term && c.def);
+  if (hardOnly) pool = pool.filter(isHard);
+  if (!pool.length) {
+    toast(hardOnly ? "¡No tienes términos difíciles! 🎉" : "El mazo está vacío");
+    return go(`#/vocab/${id}`);
+  }
+  let dir = pref.get("vocabDir", "term"); // qué lado se ve primero en tarjetas
+  let quizType = pref.get("quizType", "write");
+  const makeOrder = (list) => [...shuffle(list.filter(isHard)), ...shuffle(list.filter((c) => !isHard(c)))];
+  let st = { order: makeOrder(pool), i: 0, res: {}, answered: false, flipped: false, last: null, opts: {} };
+
+  let saveT = null;
+  const saveNow = async () => {
+    clearTimeout(saveT);
+    saveT = null;
+    try { await db.updateVocab(id, { cards: v.cards }); } catch { toast("No se pudo guardar el progreso"); }
+  };
+  const record = (c, good) => {
+    c.ok = (c.ok || 0) + (good ? 1 : 0);
+    c.fail = (c.fail || 0) + (good ? 0 : 1);
+    c.last = good;
+    c.seen = todayStr();
+    clearTimeout(saveT);
+    saveT = setTimeout(saveNow, 800);
+  };
+  cleanup = async () => { if (saveT) await saveNow(); };
+
+  const choicesFor = (c) => {
+    const others = shuffle(v.cards.filter((o) => norm(o.term) !== norm(c.term))).slice(0, 3).map((o) => o.term);
+    return others.length ? shuffle([c.term, ...others]) : null;
+  };
+
+  function render() {
+    const c = st.order[st.i];
+    const done = Object.keys(st.res).length, good = Object.values(st.res).filter((r) => r !== "wrong").length;
+    const head = `
+      <div class="vbar">
+        <a class="icon-btn" href="#/vocab/${id}" aria-label="Volver">←</a>
+        <b class="ell" style="flex:1">${esc(v.name)} · ${kind === "cards" ? "Tarjetas" : "Quiz"}${hardOnly ? " (difíciles)" : ""}</b>
+        ${kind === "cards"
+          ? `<div class="seg" id="dir"><button data-d="term" class="${dir === "term" ? "on" : ""}">Término</button><button data-d="def" class="${dir === "def" ? "on" : ""}">Definición</button></div>`
+          : `<div class="seg" id="qt"><button data-t="write" class="${quizType === "write" ? "on" : ""}">✍️ Escribir</button><button data-t="choice" class="${quizType === "choice" ? "on" : ""}">🔘 Opciones</button></div>`}
+      </div>
+      <div class="vprog"><span>${Math.min(st.i + 1, st.order.length)} / ${st.order.length}</span><span>✓ ${good} · ✗ ${done - good}</span></div>`;
+    let body;
+    if (!c) {
+      const wrong = st.order.filter((x) => st.res[x.id] === "wrong");
+      body = `<div class="vend">
+        <div class="big">${wrong.length ? "💪" : "🎉"}</div>
+        <h2>${wrong.length ? `Terminaste: ✓ ${good} · ✗ ${wrong.length}` : `¡Perfecto! ${good} de ${good}`}</h2>
+        <div class="row" style="justify-content:center">
+          ${wrong.length ? `<button class="btn primary" id="retry">Repetir los ${wrong.length} que fallé</button>` : ""}
+          <button class="btn" id="again">↺ Otra vez</button>
+          <a class="btn" href="#/vocab/${id}">Volver al mazo</a></div></div>`;
+    } else if (kind === "cards") {
+      const front = dir === "term" ? `<div class="vterm">${esc(c.term)}</div>` : `<div class="vdef">${esc(c.def)}</div>`;
+      const back = dir === "term" ? `<div class="vdef">${esc(c.def)}</div>` : `<div class="vterm">${esc(c.term)}</div>`;
+      body = `
+        <button class="flash ${st.flipped ? "flipped" : ""}" id="flash">
+          ${front}${st.flipped ? `<hr>${back}` : `<small class="muted">Toca para dar vuelta</small>`}
+        </button>
+        <div class="row vbtns">${st.flipped
+          ? `<button class="btn big-btn bad" id="no">✗ No lo sabía</button><button class="btn big-btn good" id="yes">✓ Lo sabía</button>`
+          : `<button class="btn big-btn" id="flip">Dar vuelta</button>`}</div>`;
+    } else {
+      const opts = quizType === "choice" ? (st.opts[c.id] ??= choicesFor(c)) : null;
+      const r = st.last;
+      body = `
+        <div class="flash static"><small class="muted">¿Qué término es?</small><div class="vdef">${esc(c.def)}</div></div>
+        ${st.answered ? `
+          <div class="fb ${r.g === "wrong" ? "bad" : "ok"} vfb">${r.g === "right" ? `✓ ¡Correcto! <b>${esc(c.term)}</b>`
+            : r.g === "close" ? `✓ Casi, ojo con la ortografía: <b>${esc(c.term)}</b>`
+            : `✗ Era <b>${esc(c.term)}</b>${r.a ? ` (${r.exact ? "elegiste" : "escribiste"} “${esc(r.a)}”)` : ""}`}</div>
+          <div class="row vbtns">${r.g === "wrong" && r.a && !r.exact ? `<button class="btn" id="override">Lo tenía bien</button>` : ""}
+            <button class="btn primary big-btn" id="next">Siguiente →</button></div>`
+        : opts ? `<div class="choices">${opts.map((o, k) => `<button class="btn" data-k="${k}">${esc(o)}</button>`).join("")}</div>`
+        : `<form id="qf" class="row vform"><input class="input" id="ans" placeholder="Escribe el término" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go" />
+            <button class="btn primary" type="submit">Comprobar</button><button class="btn" type="button" id="idk">No sé</button></form>`}`;
+    }
+    $app.innerHTML = `<div class="vstudy">${head}<div class="vbody">${body}</div></div>`;
+    wire(c);
+  }
+  function next() {
+    st.i++;
+    st.answered = st.flipped = false;
+    render();
+  }
+  function wire(c) {
+    const q = (sel) => $app.querySelector(sel);
+    q("#dir")?.addEventListener("click", (e) => {
+      const d = e.target.closest("button")?.dataset.d;
+      if (d && d !== dir) { dir = d; pref.set("vocabDir", d); st.flipped = false; render(); }
+    });
+    q("#qt")?.addEventListener("click", (e) => {
+      const t = e.target.closest("button")?.dataset.t;
+      if (t && t !== quizType) { quizType = t; pref.set("quizType", t); render(); }
+    });
+    q("#retry")?.addEventListener("click", () => {
+      st = { order: shuffle(st.order.filter((x) => st.res[x.id] === "wrong")), i: 0, res: {}, answered: false, flipped: false, opts: {} };
+      render();
+    });
+    q("#again")?.addEventListener("click", () => {
+      st = { order: makeOrder(pool), i: 0, res: {}, answered: false, flipped: false, opts: {} };
+      render();
+    });
+    if (!c) return;
+    const flip = () => { st.flipped = true; render(); };
+    q("#flash")?.addEventListener("click", () => !st.flipped && flip());
+    q("#flip")?.addEventListener("click", flip);
+    q("#yes")?.addEventListener("click", () => { record(c, true); st.res[c.id] = "right"; next(); });
+    q("#no")?.addEventListener("click", () => { record(c, false); st.res[c.id] = "wrong"; next(); });
+    const answer = (text, exact) => {
+      const g = exact ? (text === c.term ? "right" : "wrong") : grade(text, c.term);
+      record(c, g !== "wrong");
+      st.res[c.id] = g;
+      st.answered = true;
+      st.last = { g, a: text.trim(), exact };
+      render();
+    };
+    q("#qf")?.addEventListener("submit", (e) => { e.preventDefault(); answer(q("#ans").value); });
+    q("#idk")?.addEventListener("click", () => answer(""));
+    $app.querySelectorAll(".choices [data-k]").forEach((b) => (b.onclick = () => answer(st.opts[c.id][+b.dataset.k], true)));
+    q("#next")?.addEventListener("click", next);
+    q("#override")?.addEventListener("click", () => {
+      c.fail = Math.max(0, (c.fail || 0) - 1);
+      record(c, true);
+      st.res[c.id] = st.last.g = "right";
+      render();
+    });
+    if (canAutoFocus) (q("#ans") || q("#next"))?.focus();
+  }
+  render();
 }
 
 /* ================================================================== */

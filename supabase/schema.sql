@@ -64,3 +64,18 @@ create policy "fotos: subir las propias" on storage.objects
 create policy "fotos: borrar las propias" on storage.objects
   for delete to authenticated
   using (bucket_id = 'radiografias' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- 5) Vocabulario (mazos de términos y definiciones) -------------------------
+create table if not exists public.vocab_decks (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  name        text not null,
+  cards       jsonb not null default '[]'::jsonb,
+  created_at  timestamptz not null default now()
+);
+alter table public.vocab_decks enable row level security;
+drop policy if exists "vocab: solo el dueño" on public.vocab_decks;
+create policy "vocab: solo el dueño" on public.vocab_decks
+  for all to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());

@@ -310,3 +310,44 @@ a.pill { color: var(--text); text-decoration: none; background: var(--accent-sof
 .todo-item .ell { flex: 1; }
 .tools .hint.placing { color: #24497a; background: #dcebff; padding: 6px 10px; border-radius: 10px; }
 .side a small { margin-left: auto; }
+
+/* ---------- Vocabulario ---------- */
+.btn.off { opacity: .45; pointer-events: none; }
+.btn.good { background: #d6f3e3; border-color: #bfe9d2; color: #22583b; }
+.btn.bad { background: #ffe0e0; border-color: #f7c6c6; color: #8a2d2d; }
+textarea.input.area { min-height: 120px; padding: 12px 14px; line-height: 1.4; resize: vertical; font-size: 15px; }
+.flabel { display: grid; gap: 6px; font-size: 14px; color: var(--muted); }
+pre.code { background: #2d2640; color: #f3eefc; padding: 14px; border-radius: 12px; overflow-x: auto; font-size: 12.5px; white-space: pre; }
+.box.how ol { margin: 8px 0 10px; padding-left: 22px; display: grid; gap: 6px; }
+.vlist { display: grid; gap: 8px; }
+.vrow {
+  display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 10px 10px 10px 14px; box-shadow: var(--shadow);
+}
+.vrow[hidden] { display: none; }
+.vtxt { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.vtxt span { color: var(--muted); font-size: 14px; }
+.icon-btn.sm { width: 36px; height: 36px; font-size: 15px; }
+.topbar .icon-btn + h1 { margin-left: 0; }
+
+.vstudy { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); }
+.vprog { display: flex; justify-content: space-between; padding: 10px 16px; color: var(--muted); font-size: 14px; max-width: 720px; width: 100%; margin: 0 auto; }
+.vbody { flex: 1; display: flex; flex-direction: column; gap: 16px; padding: 8px 16px calc(24px + var(--safe-bottom)); max-width: 720px; width: 100%; margin: 0 auto; }
+.flash {
+  min-height: 260px; border-radius: 24px; border: 1px solid var(--line); background: var(--panel);
+  box-shadow: 0 14px 40px rgba(80, 60, 110, .14); padding: 28px 22px; text-align: center;
+  display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 14px;
+}
+.flash:not(.static) { cursor: pointer; }
+.flash.flipped { background: #fff9fc; }
+.flash hr { width: 60%; border: 0; border-top: 2px dashed var(--line); margin: 4px 0; }
+.vterm { font-size: clamp(26px, 5vw, 40px); font-weight: 800; color: #b04a78; }
+.vdef { font-size: clamp(18px, 3vw, 22px); line-height: 1.45; }
+.vbtns { justify-content: center; }
+.big-btn { min-height: 56px; padding: 0 26px; font-size: 17px; flex: 1; max-width: 280px; }
+.vform { flex-wrap: nowrap; }
+.vfb { text-align: center; font-size: 18px; }
+.vfb.ok { color: var(--ok-ink); } .vfb.bad { color: var(--bad-ink); }
+.vend { text-align: center; padding: 40px 0; display: grid; gap: 16px; }
+.vend .big { font-size: 56px; }
+a.btn { text-decoration: none; }
