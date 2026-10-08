@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=15";
+import { db, isDemo, localDb } from "./db.js?v=16";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -89,8 +89,23 @@ const todosOf = (labels) => (labels || []).filter(isTodo);
 // Lo que se estudia: rótulos con nombre y recuadros que tapan texto (con o sin nombre)
 const withText = (labels) => (labels || []).filter((l) => !l.kind && ((l.text || "").trim() || l.shape === "rect"));
 const isRect = (l) => l.shape === "rect";
+// Tipo de carpeta: radiografías (rx) o atlas de anatomía. El tipo va como prefijo oculto en el nombre.
+const ATLAS = "atlas::";
+const deckKind = (d) => ((d?.name || "").startsWith(ATLAS) ? "atlas" : "rx");
+const deckName = (d) => (d?.name || "").replace(/^atlas::/, "");
+const KIND = {
+  rx: { icon: "🩻", title: "Radiografías", folder: "Ej: Codo, Hombro, Tórax AP", img: "radiografía", imgs: "radiografías", eg: "Ej: Codo lateral" },
+  atlas: { icon: "🫀", title: "Atlas de anatomía", folder: "Ej: Músculos de la espalda, Tórax", img: "imagen", imgs: "imágenes", eg: "Ej: Músculos de la espalda (Netter)" },
+};
 // Apuntes libres de la imagen (también se guardan junto a los rótulos)
 const notesOf = (labels) => (labels || []).find((l) => l.kind === "notes")?.text || "";
+const NOTES_TEMPLATE_ATLAS = `Origen:
+Inserción:
+Inervación:
+Irrigación:
+Función:
+Relaciones / cómo reconocerlo:
+`;
 const NOTES_TEMPLATE = `Proyección:
 Posición del paciente:
 Rayo central:
@@ -152,7 +167,8 @@ async function route() {
     else if (parts[0] === "vocab" && parts[1]) await renderVocabDeck(parts[1]);
     else if (parts[0] === "vocab") await renderVocabHome();
     else if (parts[0] === "cuenta") await renderAccount();
-    else await renderHome();
+    else if (parts[0] === "atlas") await renderHome("atlas");
+    else await renderHome("rx");
   } catch (e) {
     console.error(e);
     $app.innerHTML = `<div class="page"><div class="empty"><div class="big">⚠️</div>
@@ -224,17 +240,19 @@ function frame(decks, active, content) {
   <aside class="side" id="side">
     <div class="brand">Rotula<span>do</span></div>
     <nav>
-      <a href="#/" class="${active === "home" ? "on" : ""}">🏠 Inicio</a>
-      <a href="#/progreso" class="${active === "progress" ? "on" : ""}">📊 Mi progreso</a>
+      <a href="#/" class="${active === "home" ? "on" : ""}">🩻 Radiografías</a>
+      <a href="#/atlas" class="${active === "atlas" ? "on" : ""}">🫀 Atlas de anatomía</a>
       <a href="#/vocab" class="${active === "vocab" ? "on" : ""}">📖 Vocabulario</a>
+      <a href="#/progreso" class="${active === "progress" ? "on" : ""}">📊 Mi progreso</a>
       <a href="#/dudas" class="${active === "todos" ? "on" : ""}">📝 Dudas para clase${(() => { const n = decks.reduce((k, d) => k + d.images.reduce((j, im) => j + todosOf(im.labels).length, 0), 0); return n ? `<small>${n}</small>` : ""; })()}</a>
       <a href="#/cuenta" class="${active === "account" ? "on" : ""}">👤 Mi cuenta</a>
     </nav>
-    <div class="side-h">Mis carpetas</div>
+    ${["rx", "atlas"].map((k) => `
+    <div class="side-h">${KIND[k].icon} ${KIND[k].title}</div>
     <nav>
-      ${decks.map((d) => `<a href="#/deck/${d.id}" class="${active === d.id ? "on" : ""}">📁 <span class="ell">${esc(d.name)}</span><small>${deckStats(d.images).pct}%</small></a>`).join("")}
-      <button class="side-new" id="sideNew">＋ Nueva carpeta</button>
-    </nav>
+      ${decks.filter((d) => deckKind(d) === k).map((d) => `<a href="#/deck/${d.id}" class="${active === d.id ? "on" : ""}">📁 <span class="ell">${esc(deckName(d))}</span><small>${deckStats(d.images).pct}%</small></a>`).join("")}
+      <button class="side-new" data-kind="${k}">＋ Nueva carpeta</button>
+    </nav>`).join("")}
     <a class="side-foot" href="#/cuenta">${isDemo ? "💾 Sin cuenta (solo este dispositivo)" : `👤 ${esc(user.email)}`}</a>
   </aside>
   <div class="scrim" id="scrim"></div>
@@ -247,25 +265,28 @@ function wireFrame() {
   $app.querySelectorAll(".menu-btn").forEach((b) => (b.onclick = () => document.body.classList.add("side-open")));
   $app.querySelector("#scrim").onclick = close;
   $app.querySelectorAll(".side a").forEach((a) => a.addEventListener("click", close));
-  $app.querySelector("#sideNew").onclick = () => { close(); newDeck(); };
+  $app.querySelectorAll(".side-new").forEach((b) => (b.onclick = () => { close(); newDeck(b.dataset.kind); }));
 }
-async function newDeck() {
-  const name = prompt("Nombre de la carpeta (ej: Codo, Hombro, Tórax AP):");
+async function newDeck(kind = "rx") {
+  const name = prompt(`Nombre de la carpeta de ${KIND[kind].title.toLowerCase()} (${KIND[kind].folder}):`);
   if (!name?.trim()) return;
-  const d = await db.createDeck(name.trim());
+  const d = await db.createDeck((kind === "atlas" ? ATLAS : "") + name.trim());
   go(`#/deck/${d.id}`);
 }
 
-async function renderHome() {
-  const decks = await db.listDecks();
+async function renderHome(kind = "rx") {
+  const allDecks = await db.listDecks();
+  const decks = allDecks.filter((d) => deckKind(d) === kind);
+  const K = KIND[kind];
   let localDecks = [];
   if (!isDemo) try { localDecks = await localDb.listDecks(); } catch {}
   const t = deckStats(decks.flatMap((d) => d.images));
-  $app.innerHTML = frame(decks, "home", `
+  $app.innerHTML = frame(allDecks, kind === "atlas" ? "atlas" : "home", `
   <div class="page">
-    <div class="topbar">${menuBtn}<h1>Mis carpetas</h1></div>
+    <div class="topbar">${menuBtn}<h1>${K.icon} ${K.title}</h1></div>
+    ${kind === "atlas" ? `<p class="muted" style="margin-top:-8px">Para imágenes de atlas o de los PPT que ya traen los nombres impresos: tapas los nombres con <b>▭ recuadros</b> y estudias destapándolos.</p>` : ""}
     ${isDemo ? `<div class="banner">💾 Todavía no tienes cuenta: lo que hagas se guarda solo en este dispositivo. <a href="#/cuenta">¿Qué significa?</a></div>` : ""}
-    ${localDecks.length ? `<div class="banner" id="migrate">📲 En este dispositivo tienes <b>${localDecks.length} carpeta${localDecks.length === 1 ? "" : "s"}</b> de antes de crear tu cuenta.
+    ${localDecks.length && kind === "rx" ? `<div class="banner" id="migrate">📲 En este dispositivo tienes <b>${localDecks.length} carpeta${localDecks.length === 1 ? "" : "s"}</b> de antes de crear tu cuenta.
       <button class="btn small primary" id="doMigrate" style="margin-left:8px">Pasarlas a mi cuenta</button></div>` : ""}
     ${t.labels ? `<div class="today">
         <span class="pill">🔥 Hoy repasaste <b>${t.today}</b> rótulo${t.today === 1 ? "" : "s"}</span>
@@ -279,17 +300,17 @@ async function renderHome() {
     ${decks.length ? `<div class="grid">${decks.map((d) => {
       const s = deckStats(d.images);
       return `<button class="card" data-id="${d.id}">
-        <h3>${esc(d.name)}</h3>
-        <div class="stats"><span>🩻 ${s.imgs} ${s.imgs === 1 ? "imagen" : "imágenes"}</span><span>🏷️ ${s.labels} rótulos</span>
+        <h3>${esc(deckName(d))}</h3>
+        <div class="stats"><span>${K.icon} ${s.imgs} ${s.imgs === 1 ? "imagen" : "imágenes"}</span><span>🏷️ ${s.labels} ${kind === "atlas" ? "por estudiar" : "rótulos"}</span>
         ${s.hard ? `<span><i class="dot"></i>${s.hard} difíciles</span>` : ""}</div>
         <div class="stats"><span>${s.pct}% aprendido</span></div>
         <div class="bar"><i style="width:${s.pct}%"></i></div>
       </button>`;
     }).join("")}</div>`
-    : `<div class="empty"><div class="big">📁</div><p>Crea tu primera carpeta, por ejemplo <b>Codo</b> o <b>Tórax</b>.</p></div>`}
+    : `<div class="empty"><div class="big">📁</div><p>Crea tu primera carpeta, por ejemplo ${kind === "atlas" ? "<b>Músculos de la espalda</b> o <b>Tórax</b>" : "<b>Codo</b> o <b>Tórax</b>"}.</p></div>`}
   </div>`);
   wireFrame();
-  $app.querySelector("#new").onclick = newDeck;
+  $app.querySelector("#new").onclick = () => newDeck(kind);
   $app.querySelector("#doMigrate")?.addEventListener("click", async (e) => {
     e.target.disabled = true;
     try {
@@ -338,13 +359,13 @@ async function renderProgress() {
     <div class="plist">${decks.map((d) => {
       const s = deckStats(d.images);
       return `<a class="prow" href="#/deck/${d.id}">
-        <span class="ell"><b>${esc(d.name)}</b><br><small class="muted">${s.known} de ${s.labels} sabidos${s.hard ? ` · ${s.hard} difíciles` : ""}</small></span>
+        <span class="ell"><b>${KIND[deckKind(d)].icon} ${esc(deckName(d))}</b><br><small class="muted">${s.known} de ${s.labels} sabidos${s.hard ? ` · ${s.hard} difíciles` : ""}</small></span>
         <span class="bar"><i style="width:${s.pct}%"></i></span><b>${s.pct}%</b></a>`;
     }).join("")}</div>
     <h2 class="sec">Los que más te cuestan</h2>
     ${hard.length ? `<div class="plist">${hard.map(({ l, im, d }) => `
       <a class="prow" href="#/img/${im.id}/quiz">
-        <span class="ell"><b>${esc((l.text || "").trim() || "▭ Recuadro sin nombre")}</b><br><small class="muted">${esc(d.name)} · ${esc(im.title || "Sin título")}</small></span>
+        <span class="ell"><b>${esc((l.text || "").trim() || "▭ Recuadro sin nombre")}</b><br><small class="muted">${esc(deckName(d))} · ${esc(im.title || "Sin título")}</small></span>
         <small class="muted">✓ ${l.ok || 0} · ✗ ${l.fail || 0}</small><span class="btn small">Practicar</span></a>`).join("")}</div>`
     : `<p class="muted">¡Nada por ahora! Cuando falles un rótulo en el quiz aparecerá aquí. 🎉</p>`}
     <p class="muted" style="font-size:13px;margin-top:20px">Un rótulo cuenta como “sabido” cuando lo respondiste bien la última vez que te lo preguntaron en el Quiz.</p>`
@@ -364,7 +385,7 @@ async function renderTodos() {
     ${groups.length ? groups.map(({ d, im }) => `
       <div class="box">
         <div class="row" style="justify-content:space-between;margin-bottom:8px">
-          <span><b>${esc(im.title || "Sin título")}</b> <small class="muted">· 📁 ${esc(d.name)}</small></span>
+          <span><b>${esc(im.title || "Sin título")}</b> <small class="muted">· ${KIND[deckKind(d)].icon} ${esc(deckName(d))}</small></span>
           <a class="btn small" href="#/img/${im.id}/edit">Abrir radiografía →</a>
         </div>
         ${todosOf(im.labels).map((t) => `
@@ -496,16 +517,17 @@ async function renderDeck(deckId) {
   const [deck, images, decks] = await Promise.all([db.getDeck(deckId), db.listImages(deckId), db.listDecks()]);
   const urls = await db.imageUrls(images);
   const s = deckStats(images);
+  const K = KIND[deckKind(deck)];
   $app.innerHTML = frame(decks, deckId, `
   <div class="page">
     <div class="topbar">
       ${menuBtn}
-      <h1>${esc(deck.name)}</h1>
+      <h1>${esc(deckName(deck))}</h1>
       <button class="icon-btn" id="rename" aria-label="Renombrar">✎</button>
       <button class="icon-btn" id="del" aria-label="Borrar carpeta">🗑</button>
     </div>
     <div class="row" style="margin-bottom:10px">
-      <label class="btn primary">＋ Subir radiografías
+      <label class="btn primary">＋ Subir ${K.imgs}
         <input type="file" accept="image/*" multiple hidden id="file" />
       </label>
       <button class="btn" id="study" ${s.labels ? "" : "disabled"}>✍️ Quiz de toda la carpeta</button>
@@ -522,21 +544,21 @@ async function renderDeck(deckId) {
         <small>${ls.length} rótulo${ls.length === 1 ? "" : "s"}${hard ? ` · <i class="dot"></i>${hard}` : ""}${todosOf(im.labels).length ? ` · 📝 ${todosOf(im.labels).length}` : ""}${notesOf(im.labels).trim() ? " · 🗒" : ""}</small></div>
       </button>`;
     }).join("")}</div>`
-    : `<div class="empty"><div class="big">🩻</div><p>Sube tus radiografías (puedes elegir varias a la vez).</p></div>`}
+    : `<div class="empty"><div class="big">${K.icon}</div><p>Sube tus ${K.imgs} (puedes elegir varias a la vez).${deckKind(deck) === "atlas" ? "<br>Sirven capturas de las diapositivas o fotos del atlas." : ""}</p></div>`}
   </div>`);
   wireFrame();
 
   $app.querySelectorAll(".thumb").forEach((t) => (t.onclick = () => go(`#/img/${t.dataset.id}/edit`)));
   $app.querySelector("#rename").onclick = async () => {
-    const name = prompt("Nuevo nombre:", deck.name);
+    const name = prompt("Nuevo nombre:", deckName(deck));
     if (!name?.trim()) return;
-    await db.renameDeck(deckId, name.trim());
+    await db.renameDeck(deckId, (deckKind(deck) === "atlas" ? ATLAS : "") + name.trim());
     route();
   };
   $app.querySelector("#del").onclick = async () => {
-    if (!confirm(`¿Borrar la carpeta "${deck.name}" y sus ${images.length} imágenes? No se puede deshacer.`)) return;
+    if (!confirm(`¿Borrar la carpeta "${deckName(deck)}" y sus ${images.length} imágenes? No se puede deshacer.`)) return;
     await db.deleteDeck(deckId);
-    go("#/");
+    go(deckKind(deck) === "atlas" ? "#/atlas" : "#/");
   };
   $app.querySelector("#study").onclick = () => go(`#/deck/${deckId}/study`);
   $app.querySelector("#hard").onclick = () => go(`#/deck/${deckId}/study/hard`);
@@ -544,7 +566,7 @@ async function renderDeck(deckId) {
     const files = [...e.target.files];
     e.target.value = "";
     if (!files.length) return;
-    const names = await askNames(files);
+    const names = await askNames(files, K);
     if (!names) return;
     const up = $app.querySelector("#up");
     let last;
@@ -565,18 +587,18 @@ async function renderDeck(deckId) {
 }
 
 // Ventana para ponerle nombre a cada radiografía antes de subirla
-function askNames(files) {
+function askNames(files, K = KIND.rx) {
   return new Promise((resolve) => {
     const urls = files.map((f) => URL.createObjectURL(f));
     const m = document.createElement("div");
     m.className = "modal";
     m.innerHTML = `
       <form class="modal-card">
-        <h3>${files.length === 1 ? "¿Cómo se llama esta radiografía?" : `Ponle nombre a tus ${files.length} radiografías`}</h3>
+        <h3>${files.length === 1 ? `¿Cómo se llama esta ${K.img}?` : `Ponle nombre a tus ${files.length} ${K.imgs}`}</h3>
         <div class="name-list">${files.map((f, i) => `
           <label class="name-row">
             <img src="${urls[i]}" alt="" />
-            <input class="input" name="n${i}" placeholder="Ej: Codo lateral" autocomplete="off" enterkeyhint="${i === files.length - 1 ? "done" : "next"}" />
+            <input class="input" name="n${i}" placeholder="${K.eg}" autocomplete="off" enterkeyhint="${i === files.length - 1 ? "done" : "next"}" />
           </label>`).join("")}</div>
         <div class="row" style="justify-content:flex-end">
           <button type="button" class="btn ghost" id="cancel">Cancelar</button>
@@ -639,7 +661,9 @@ async function renderViewer(imgId, mode) {
   const todos = allLabels.filter(isTodo);
   let placing = null; // duda que estás ubicando en la imagen
   let markMode = false; // tocar la imagen marca una duda ❓ en vez de rotular
-  let rectMode = false; // arrastrar sobre la imagen dibuja un recuadro para tapar texto
+  const vKind = deckKind(allDecks.find((d) => d.id === img.deck_id));
+  const VK = KIND[vKind];
+  let rectMode = vKind === "atlas"; // arrastrar sobre la imagen dibuja un recuadro para tapar texto (en atlas viene activado)
   let onlyStar = pref.get("onlyStar", "0") === "1"; // estudiar solo los ⭐ importantes
   const studyPool = () => withText(labels).filter((l) => !onlyStar || l.star);
   let selMark = null; // duda marcada que estás viendo
@@ -652,7 +676,7 @@ async function renderViewer(imgId, mode) {
   <div class="viewer">
     <div class="vbar">
       <button class="icon-btn" id="back" aria-label="Volver">←</button>
-      <input class="title" id="title" value="${esc(img.title || "")}" placeholder="✎ Nombre (ej: Codo lateral)" />
+      <input class="title" id="title" value="${esc(img.title || "")}" placeholder="✎ Nombre (${VK.eg.replace(/^Ej: /, "ej: ")})" />
       <div class="seg" id="seg">
         <button data-m="edit">Editar</button><button data-m="study">Estudiar</button><button data-m="quiz">Quiz</button>
       </div>
@@ -960,7 +984,7 @@ async function renderViewer(imgId, mode) {
         <button class="btn small" id="undo" ${undoStack.length ? "" : "disabled"}>↶ Deshacer</button>
         <label class="size">Aa <input type="range" id="size" min="0.5" max="2" step="0.1" value="${labelSize}" /></label>
         <select id="move" aria-label="Mover a carpeta">
-          ${allDecks.map((d) => `<option value="${d.id}" ${d.id === img.deck_id ? "selected" : ""}>📁 ${esc(d.name)}</option>`).join("")}
+          ${allDecks.map((d) => `<option value="${d.id}" ${d.id === img.deck_id ? "selected" : ""}>${KIND[deckKind(d)].icon} ${esc(deckName(d))}</option>`).join("")}
         </select>
         <button class="btn small danger" id="delImg">🗑 Borrar imagen</button>`;
       tools.querySelector("#undo").onclick = undo;
@@ -993,7 +1017,7 @@ async function renderViewer(imgId, mode) {
         try {
           await db.updateImage(img.id, { deck_id: to.id });
           img.deck_id = to.id;
-          toast(`Movida a “${to.name}” ✓`);
+          toast(`Movida a “${deckName(to)}” ✓`);
         } catch {
           toast("No se pudo mover");
           e.target.value = img.deck_id;
@@ -1066,7 +1090,7 @@ async function renderViewer(imgId, mode) {
     if (!notesOpen) return (panel.innerHTML = "");
     panel.innerHTML = `
       <div class="todo-panel notes-panel">
-        <div class="row" style="justify-content:space-between"><b>🗒 Apuntes de esta radiografía</b>
+        <div class="row" style="justify-content:space-between"><b>🗒 Apuntes de esta ${VK.img}</b>
           <button class="icon-btn" id="notesClose" aria-label="Cerrar">✕</button></div>
         <textarea class="input area notes-area" id="notesArea" placeholder="Escribe lo que quieras recordar de esta imagen: proyección, posición, criterios de calidad, lo que dijo el profe…">${esc(notesText)}</textarea>
         <div class="row" style="justify-content:space-between">
@@ -1082,7 +1106,8 @@ async function renderViewer(imgId, mode) {
     };
     panel.querySelector("#notesClose").onclick = () => { notesOpen = false; renderNotes(); };
     panel.querySelector("#notesTpl").onclick = () => {
-      area.value = notesText.trim() ? notesText.replace(/\s*$/, "\n\n") + NOTES_TEMPLATE : NOTES_TEMPLATE;
+      const TPL = vKind === "atlas" ? NOTES_TEMPLATE_ATLAS : NOTES_TEMPLATE;
+      area.value = notesText.trim() ? notesText.replace(/\s*$/, "\n\n") + TPL : TPL;
       area.oninput();
     };
   }
