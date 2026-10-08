@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=10";
+import { db, isDemo, localDb } from "./db.js?v=11";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -145,7 +145,7 @@ async function route() {
   } catch (e) {
     console.error(e);
     $app.innerHTML = `<div class="page"><div class="empty"><div class="big">⚠️</div>
-      <p>Algo salió mal: ${esc(e.message || e)}</p>
+      <p>${/failed to fetch|load failed|network/i.test(String(e.message || e)) ? "No se pudo conectar con el servidor. Revisa tu internet; si sigue igual, puede que el proyecto esté pausado en Supabase." : `Algo salió mal: ${esc(e.message || e)}`}</p>
       <a class="btn" href="#/">Volver al inicio</a></div></div>`;
   }
 }
@@ -195,6 +195,7 @@ function renderAuth(mode = "login", msg = "", ok = false) {
       const nice = /invalid login/i.test(m) ? "Correo o contraseña incorrectos."
         : /not confirmed/i.test(m) ? "Primero confirma tu cuenta con el correo que te enviamos."
         : /already registered/i.test(m) ? "Ese correo ya tiene cuenta. Entra con tu contraseña."
+        : /failed to fetch|load failed|network/i.test(m) ? "No se pudo conectar con el servidor. Revisa tu internet; si sigue igual, puede que el proyecto esté pausado en Supabase."
         : m;
       form.querySelector(".msg").textContent = nice;
       form.querySelector(".msg").className = "msg err";

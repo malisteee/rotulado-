@@ -1,5 +1,5 @@
 // Capa de datos: Supabase (en línea, con cuentas) o modo prueba local (IndexedDB).
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=10";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=11";
 
 export const isDemo = !SUPABASE_URL || !SUPABASE_ANON_KEY;
 const BUCKET = "radiografias";
