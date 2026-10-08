@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=16";
+import { db, isDemo, localDb } from "./db.js?v=17";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -792,7 +792,7 @@ async function renderViewer(imgId, mode) {
     lbls.innerHTML = shown.map((l) => isRect(l) ? `
       <div class="${labelClass(l)}" data-id="${l.id}" style="left:${(l.x - l.w / 2) * 100}%;top:${(l.y - l.h / 2) * 100}%;width:${l.w * 100}%;height:${l.h * 100}%;--c:${l.color}">${l.star ? `<i class="stari">⭐</i>` : ""}${mode === "edit" && (l.text || "").trim() ? `<span>${esc(l.text.trim())}</span>` : ""}${mode === "edit" && l.id === sel ? `<b class="rh" data-id="${l.id}"></b>` : ""}</div>` : `
       <div class="${labelClass(l)}" data-id="${l.id}" style="left:${l.x * 100}%;top:${l.y * 100}%;--c:${l.color}">${l.star ? "⭐ " : ""}${esc((l.text || "").trim() || "escribe…")}</div>
-      ${mode === "edit" && l.tx != null ? `<div class="tip" data-id="${l.id}" style="left:${l.tx * 100}%;top:${l.ty * 100}%"></div>` : ""}`).join("")
+      ${mode === "edit" && l.tx != null && l.id === sel ? `<div class="tip" data-id="${l.id}" style="left:${l.tx * 100}%;top:${l.ty * 100}%"></div>` : ""}`).join("")
       + (mode === "edit" ? todos.filter((t) => t.tx != null).map((t) => `
       <div class="qmark ${t.id === selMark ? "sel" : ""}" data-id="${t.id}" style="left:${t.tx * 100}%;top:${t.ty * 100}%">?${(t.text || "").trim() ? `<span class="qguess">¿${esc(t.text.trim())}?</span>` : ""}</div>`).join("") : "");
     drawArrows();

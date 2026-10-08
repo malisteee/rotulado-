@@ -11,11 +11,26 @@
   <title>Rotulado</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icon.png" />
-  <link rel="stylesheet" href="styles.css?v=16" />
+  <link rel="stylesheet" href="styles.css?v=17" />
+  <script>
+    // Si el iPad guardó una copia vieja de la página, la recargamos con la versión nueva.
+    (function () {
+      var V = 17;
+      fetch("version.json?t=" + Date.now(), { cache: "no-store" })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (j.v > V && sessionStorage.getItem("reloadedFor") != j.v) {
+            sessionStorage.setItem("reloadedFor", j.v);
+            location.replace(location.pathname + "?v=" + j.v + location.hash);
+          }
+        })
+        .catch(function () {});
+    })();
+  </script>
 </head>
 <body>
   <div id="app"><div class="loading">Cargando…</div></div>
   <div id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="app.js?v=16"></script>
+  <script type="module" src="app.js?v=17"></script>
 </body>
 </html>
