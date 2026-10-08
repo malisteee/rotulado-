@@ -352,3 +352,18 @@ pre.code { background: #2d2640; color: #f3eefc; padding: 14px; border-radius: 12
 .vend .big { font-size: 56px; }
 a.btn { text-decoration: none; }
 textarea.input.notes-area { min-height: 280px; }
+
+/* ---------- Dudas marcadas en la imagen ---------- */
+.qmark {
+  position: absolute; transform: translate(-50%, -50%); width: 1.5em; height: 1.5em; border-radius: 50%;
+  display: grid; place-items: center; font-weight: 800; font-size: 1em; color: #1f3d66;
+  background: #9cc9ff; border: .12em solid #fff; box-shadow: 0 0 0 .1em rgba(0,0,0,.35), 0 .1em .4em rgba(0,0,0,.5);
+  touch-action: none; cursor: pointer; z-index: 2; animation: qpulse 2s ease-in-out infinite;
+}
+.qmark.sel { background: #ffe38f; color: #5c4710; }
+.qguess {
+  position: absolute; left: 1.7em; top: 50%; transform: translateY(-50%); white-space: nowrap;
+  font-size: .75em; font-weight: 700; color: #1f3d66; background: rgba(220, 235, 255, .92);
+  padding: .1em .45em; border-radius: .3em; pointer-events: none;
+}
+@keyframes qpulse { 50% { box-shadow: 0 0 0 .35em rgba(156, 201, 255, .35), 0 .1em .4em rgba(0,0,0,.5); } }

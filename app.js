@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=12";
+import { db, isDemo, localDb } from "./db.js?v=13";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -358,7 +358,7 @@ async function renderTodos() {
   $app.innerHTML = frame(decks, "todos", `
   <div class="page">
     <div class="topbar">${menuBtn}<h1>Dudas para clase</h1></div>
-    <p class="muted" style="margin-top:-8px">Estructuras que anotaste porque no sabías dónde estaban. Llévalas a clase y, cuando sepas, ábrelas y toca <b>📍 Ubicar</b>.</p>
+    <p class="muted" style="margin-top:-8px">Estructuras que anotaste porque no sabías dónde estaban. Llévalas a clase y, cuando sepas la respuesta, abre la radiografía y toca la marca <b>❓</b> → <b>✓ Ya sé: rotular</b> (o <b>📍 Ubicar</b> si la anotaste sin marcar).</p>
     ${groups.length ? groups.map(({ d, im }) => `
       <div class="box">
         <div class="row" style="justify-content:space-between;margin-bottom:8px">
@@ -367,7 +367,7 @@ async function renderTodos() {
         </div>
         ${todosOf(im.labels).map((t) => `
           <div class="todo-item">
-            <span class="ell">❓ ${esc(t.text)}</span>
+            <span class="ell">❓ ${esc((t.text || "").trim() || "Punto marcado sin nombre")}${t.tx != null ? ` <small class="muted">· 📍 marcada en la imagen</small>` : ""}</span>
             <button class="btn small ghost" data-img="${im.id}" data-del="${t.id}">✓ Resuelta</button>
           </div>`).join("")}
       </div>`).join("")
@@ -636,6 +636,8 @@ async function renderViewer(imgId, mode) {
   let notesOpen = false;
   const todos = allLabels.filter(isTodo);
   let placing = null; // duda que estás ubicando en la imagen
+  let markMode = false; // tocar la imagen marca una duda ❓ en vez de rotular
+  let selMark = null; // duda marcada que estás viendo
   let todoOpen = false;
   let labelSize = img.label_size || 1;
   if (session && session.ids[session.idx] !== imgId) session = null;
@@ -758,7 +760,9 @@ async function renderViewer(imgId, mode) {
     const shown = mode === "edit" ? labels : withText(labels);
     lbls.innerHTML = shown.map((l) => `
       <div class="${labelClass(l)}" data-id="${l.id}" style="left:${l.x * 100}%;top:${l.y * 100}%;--c:${l.color}">${esc((l.text || "").trim() || "escribe…")}</div>
-      ${mode === "edit" && l.tx != null ? `<div class="tip" data-id="${l.id}" style="left:${l.tx * 100}%;top:${l.ty * 100}%"></div>` : ""}`).join("");
+      ${mode === "edit" && l.tx != null ? `<div class="tip" data-id="${l.id}" style="left:${l.tx * 100}%;top:${l.ty * 100}%"></div>` : ""}`).join("")
+      + (mode === "edit" ? todos.filter((t) => t.tx != null).map((t) => `
+      <div class="qmark ${t.id === selMark ? "sel" : ""}" data-id="${t.id}" style="left:${t.tx * 100}%;top:${t.ty * 100}%">?${(t.text || "").trim() ? `<span class="qguess">¿${esc(t.text.trim())}?</span>` : ""}</div>`).join("") : "");
     drawArrows();
   }
   /* ---------- Geometría: rótulos sin líneas cruzadas ---------- */
@@ -902,7 +906,7 @@ async function renderViewer(imgId, mode) {
     mode = m;
     history.replaceState(null, "", `#/img/${img.id}/${m}`);
     $("#seg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
-    if (m !== "edit") placing = null;
+    if (m !== "edit") placing = markMode = selMark = null;
     if (m === "study") revealed.clear();
     if (m === "quiz") startQuiz();
     else quiz = null;
@@ -926,7 +930,9 @@ async function renderViewer(imgId, mode) {
       tools.innerHTML = `
         ${placing ? `<span class="hint placing">📍 Toca en la imagen dónde está <b>“${esc(todos.find((t) => t.id === placing)?.text)}”</b></span>
           <button class="btn small" id="cancelPlace">Cancelar</button>`
+        : markMode ? `<span class="hint placing">❓ Toca donde está la estructura que quieres preguntar en clase</span>`
         : `<span class="hint">👆 Toca la estructura para poner un rótulo · arrastra el rótulo o la punta ⚪ para moverlos</span>`}
+        <button class="btn small ${markMode ? "primary" : ""}" id="markBtn">❓ ${markMode ? "Marcando… (tocar para terminar)" : "Marcar duda"}</button>
         <button class="btn small ${todos.length ? "sky" : ""}" id="todoBtn">📝 Dudas${todos.length ? ` (${todos.length})` : ""}</button>
         ${(() => { const n = baseW ? countProblems() : 0; return n ? `<span class="warn">⚠️ ${n} cruce${n === 1 ? "" : "s"}</span>` : ""; })()}
         <button class="btn small" id="tidy">🪄 Ordenar rótulos</button>
@@ -938,6 +944,12 @@ async function renderViewer(imgId, mode) {
         <button class="btn small danger" id="delImg">🗑 Borrar imagen</button>`;
       tools.querySelector("#undo").onclick = undo;
       tools.querySelector("#tidy").onclick = tidyAll;
+      tools.querySelector("#markBtn").onclick = () => {
+        markMode = !markMode;
+        placing = null;
+        if (sel) deselect();
+        renderTools();
+      };
       tools.querySelector("#todoBtn").onclick = () => {
         todoOpen = !todoOpen;
         if (todoOpen && notesOpen) { notesOpen = false; renderNotes(); }
@@ -1061,8 +1073,8 @@ async function renderViewer(imgId, mode) {
         </form>
         <div class="todo-list">${todos.length ? todos.map((t) => `
           <div class="todo-item">
-            <span class="ell">❓ ${esc(t.text)}</span>
-            <button class="btn small" data-place="${t.id}">📍 Ubicar</button>
+            <span class="ell">❓ ${t.tx != null ? `${esc((t.text || "").trim() || "Punto marcado")} <small class="muted">· marcada en la imagen</small>` : esc(t.text)}</span>
+            ${t.tx != null ? `<button class="btn small mint" data-convert="${t.id}">✓ Rotular</button>` : `<button class="btn small" data-place="${t.id}">📍 Ubicar</button>`}
             <button class="btn small ghost" data-del="${t.id}" aria-label="Borrar">✕</button>
           </div>`).join("") : `<p class="muted" style="font-size:14px">No tienes dudas en esta radiografía 🎉</p>`}</div>
       </div>`;
@@ -1081,6 +1093,11 @@ async function renderViewer(imgId, mode) {
       scheduleSave();
       renderTodo();
       renderTools();
+    }));
+    panel.querySelectorAll("[data-convert]").forEach((b) => (b.onclick = () => {
+      todoOpen = false;
+      renderTodo();
+      convertMark(todos.find((t) => t.id === b.dataset.convert));
     }));
     panel.querySelectorAll("[data-place]").forEach((b) => (b.onclick = () => {
       if (sel) deselect();
@@ -1109,6 +1126,7 @@ async function renderViewer(imgId, mode) {
     scheduleSave();
   }
   function select(id, focus = true, fresh = false) {
+    selMark = null;
     preEdit = fresh ? null : JSON.stringify(labels);
     sel = id;
     renderLabels();
@@ -1129,7 +1147,51 @@ async function renderViewer(imgId, mode) {
     renderTools();
     scheduleSave();
   }
+  // Pasar una duda marcada a rótulo (en el mismo punto)
+  function convertMark(t) {
+    if (!t) return;
+    const l = { id: newId(), text: (t.text || "").trim(), color: lastColor, x: t.tx, y: t.ty, tx: t.tx, ty: t.ty, ok: 0, fail: 0, auto: true };
+    snap();
+    placeSmart(l);
+    labels.push(l);
+    todos.splice(todos.indexOf(t), 1);
+    selMark = null;
+    markMode = false;
+    renderTools();
+    select(l.id, true, true);
+    toast(l.text ? "Revisa el nombre y toca Listo ✓" : "Escribe el nombre de la estructura");
+  }
   function renderBottom(focus) {
+    const t = mode === "edit" && selMark && todos.find((x) => x.id === selMark);
+    if (t) {
+      bottom.innerHTML = `
+        <div class="sheet">
+          <b>❓ Duda marcada</b>
+          <input class="input" id="markText" value="${esc(t.text || "")}" placeholder="¿Qué crees que es? (opcional)" autocomplete="off" enterkeyhint="done" />
+          <div class="row">
+            <button class="btn danger" id="markDel">Eliminar</button>
+            <button class="btn mint" id="markLabel">✓ Ya sé: rotular</button>
+            <button class="btn primary" id="markDone">Listo</button>
+          </div>
+        </div>`;
+      const inp = bottom.querySelector("#markText");
+      const closeMark = () => { selMark = null; renderLabels(); renderBottom(); renderTools(); };
+      inp.oninput = () => {
+        t.text = inp.value;
+        const el = lbls.querySelector(`.qmark[data-id="${t.id}"]`);
+        if (el) el.innerHTML = "?" + (inp.value.trim() ? `<span class="qguess">¿${esc(inp.value.trim())}?</span>` : "");
+        scheduleSave();
+      };
+      inp.onkeydown = (e) => { if (e.key === "Enter") closeMark(); };
+      bottom.querySelector("#markDone").onclick = closeMark;
+      bottom.querySelector("#markDel").onclick = () => {
+        todos.splice(todos.indexOf(t), 1);
+        scheduleSave();
+        closeMark();
+      };
+      bottom.querySelector("#markLabel").onclick = () => convertMark(t);
+      return;
+    }
     if (mode === "edit" && sel) {
       const l = labels.find((x) => x.id === sel);
       bottom.innerHTML = `
@@ -1370,10 +1432,10 @@ async function renderViewer(imgId, mode) {
       return;
     }
     if (pointers.size > 2) return;
-    const tip = e.target.closest(".tip"), lb = e.target.closest(".lbl");
-    const kind = tip ? "tip" : lb ? "lbl" : "bg";
-    const id = (tip || lb)?.dataset.id;
-    const l = labels.find((x) => x.id === id);
+    const tip = e.target.closest(".tip"), lb = e.target.closest(".lbl"), qm = mode === "edit" && e.target.closest(".qmark");
+    const kind = qm ? "qmark" : tip ? "tip" : lb ? "lbl" : "bg";
+    const id = (qm || tip || lb)?.dataset.id;
+    const l = kind === "qmark" ? todos.find((x) => x.id === id) : labels.find((x) => x.id === id);
     g = { type: "tap", kind, id, x0: e.clientX, y0: e.clientY, moved: false, v0: { ...view }, l0: l ? { ...l } : null };
   });
   stage.addEventListener("pointermove", (e) => {
@@ -1390,7 +1452,16 @@ async function renderViewer(imgId, mode) {
     if (!g.moved) {
       if (Math.hypot(dx, dy) < 6) return;
       g.moved = true;
-      if (mode === "edit" && g.kind !== "bg" && g.id) snap();
+      if (mode === "edit" && g.kind !== "bg" && g.kind !== "qmark" && g.id) snap();
+    }
+    if (mode === "edit" && g.kind === "qmark") {
+      const t = todos.find((x) => x.id === g.id);
+      if (!t) return;
+      t.tx = clamp(g.l0.tx + dx / (baseW * view.s), 0, 1);
+      t.ty = clamp(g.l0.ty + dy / (baseH * view.s), 0, 1);
+      const el = lbls.querySelector(`.qmark[data-id="${t.id}"]`);
+      if (el) Object.assign(el.style, { left: t.tx * 100 + "%", top: t.ty * 100 + "%" });
+      return;
     }
     const l = labels.find((x) => x.id === g.id);
     if (mode === "edit" && l && g.kind === "lbl") {
@@ -1432,14 +1503,35 @@ async function renderViewer(imgId, mode) {
 
   function onTap(gg, e) {
     if (mode === "edit") {
+      if (gg.kind === "qmark") {
+        if (sel) deselect();
+        selMark = gg.id;
+        renderLabels();
+        return renderBottom();
+      }
       if (gg.kind !== "bg") {
         if (sel === gg.id) return;
         if (sel) deselect();
         return select(gg.id);
       }
       if (sel) return deselect();
+      if (selMark) {
+        selMark = null;
+        renderLabels();
+        renderTools();
+        return renderBottom();
+      }
       const p = toNorm(e.clientX, e.clientY);
       if (p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1) return;
+      if (markMode) {
+        const t = { id: newId(), kind: "todo", text: "", tx: p.x, ty: p.y, created: todayStr() };
+        todos.push(t);
+        selMark = t.id;
+        scheduleSave();
+        renderLabels();
+        renderTools();
+        return renderBottom();
+      }
       const todo = placing && todos.find((t) => t.id === placing);
       const l = {
         id: newId(), text: todo ? todo.text : "", color: lastColor,
