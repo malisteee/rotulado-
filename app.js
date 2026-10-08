@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=14";
+import { db, isDemo, localDb } from "./db.js?v=15";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -86,7 +86,9 @@ const isKnown = (l) => l.last === true;
 // "Dudas": estructuras anotadas que todavía no sabes ubicar (se guardan junto a los rótulos)
 const isTodo = (l) => l.kind === "todo";
 const todosOf = (labels) => (labels || []).filter(isTodo);
-const withText = (labels) => (labels || []).filter((l) => !l.kind && (l.text || "").trim());
+// Lo que se estudia: rótulos con nombre y recuadros que tapan texto (con o sin nombre)
+const withText = (labels) => (labels || []).filter((l) => !l.kind && ((l.text || "").trim() || l.shape === "rect"));
+const isRect = (l) => l.shape === "rect";
 // Apuntes libres de la imagen (también se guardan junto a los rótulos)
 const notesOf = (labels) => (labels || []).find((l) => l.kind === "notes")?.text || "";
 const NOTES_TEMPLATE = `Proyección:
@@ -342,7 +344,7 @@ async function renderProgress() {
     <h2 class="sec">Los que más te cuestan</h2>
     ${hard.length ? `<div class="plist">${hard.map(({ l, im, d }) => `
       <a class="prow" href="#/img/${im.id}/quiz">
-        <span class="ell"><b>${esc(l.text)}</b><br><small class="muted">${esc(d.name)} · ${esc(im.title || "Sin título")}</small></span>
+        <span class="ell"><b>${esc((l.text || "").trim() || "▭ Recuadro sin nombre")}</b><br><small class="muted">${esc(d.name)} · ${esc(im.title || "Sin título")}</small></span>
         <small class="muted">✓ ${l.ok || 0} · ✗ ${l.fail || 0}</small><span class="btn small">Practicar</span></a>`).join("")}</div>`
     : `<p class="muted">¡Nada por ahora! Cuando falles un rótulo en el quiz aparecerá aquí. 🎉</p>`}
     <p class="muted" style="font-size:13px;margin-top:20px">Un rótulo cuenta como “sabido” cuando lo respondiste bien la última vez que te lo preguntaron en el Quiz.</p>`
@@ -637,6 +639,9 @@ async function renderViewer(imgId, mode) {
   const todos = allLabels.filter(isTodo);
   let placing = null; // duda que estás ubicando en la imagen
   let markMode = false; // tocar la imagen marca una duda ❓ en vez de rotular
+  let rectMode = false; // arrastrar sobre la imagen dibuja un recuadro para tapar texto
+  let onlyStar = pref.get("onlyStar", "0") === "1"; // estudiar solo los ⭐ importantes
+  const studyPool = () => withText(labels).filter((l) => !onlyStar || l.star);
   let selMark = null; // duda marcada que estás viendo
   let todoOpen = false;
   let labelSize = img.label_size || 1;
@@ -690,7 +695,7 @@ async function renderViewer(imgId, mode) {
     try {
       await db.updateImage(img.id, {
         title: titleVal.trim(),
-        labels: [...labels.filter((l) => (l.text || "").trim() || l.id === sel), ...todos,
+        labels: [...labels.filter((l) => (l.text || "").trim() || isRect(l) || l.id === sel), ...todos,
           ...(notesText.trim() ? [{ id: "notes", kind: "notes", text: notesText }] : [])],
         label_size: labelSize,
       });
@@ -744,22 +749,25 @@ async function renderViewer(imgId, mode) {
 
   /* ---------- Dibujo de rótulos y flechas ---------- */
   function labelClass(l) {
-    const c = ["lbl"];
+    const c = [isRect(l) ? "occ" : "lbl"];
+    if (l.star) c.push("star");
     if (!(l.text || "").trim()) c.push("empty-text");
     if (mode === "edit" && l.id === sel) c.push("sel");
-    if (mode === "study" && !revealed.has(l.id)) c.push("covered");
+    if (mode === "study" && !revealed.has(l.id) && (!onlyStar || l.star)) c.push("covered");
     if (mode === "quiz" && quiz) {
       const res = quiz.results[l.id];
-      if (res) c.push(res === "wrong" ? "wrong" : "right");
+      if (quiz.peekId === l.id) c.push("peek");
+      else if (res) c.push(res === "wrong" ? "wrong" : "right");
       else if (quiz.order.some((o) => o.id === l.id)) c.push("covered");
-      if (quiz.order[quiz.i]?.id === l.id && !quiz.answered) c.push("active");
+      if (quiz.order[quiz.i]?.id === l.id && !quiz.answered && quiz.peekId !== l.id) c.push("active");
     }
     return c.join(" ");
   }
   function renderLabels() {
     const shown = mode === "edit" ? labels : withText(labels);
-    lbls.innerHTML = shown.map((l) => `
-      <div class="${labelClass(l)}" data-id="${l.id}" style="left:${l.x * 100}%;top:${l.y * 100}%;--c:${l.color}">${esc((l.text || "").trim() || "escribe…")}</div>
+    lbls.innerHTML = shown.map((l) => isRect(l) ? `
+      <div class="${labelClass(l)}" data-id="${l.id}" style="left:${(l.x - l.w / 2) * 100}%;top:${(l.y - l.h / 2) * 100}%;width:${l.w * 100}%;height:${l.h * 100}%;--c:${l.color}">${l.star ? `<i class="stari">⭐</i>` : ""}${mode === "edit" && (l.text || "").trim() ? `<span>${esc(l.text.trim())}</span>` : ""}${mode === "edit" && l.id === sel ? `<b class="rh" data-id="${l.id}"></b>` : ""}</div>` : `
+      <div class="${labelClass(l)}" data-id="${l.id}" style="left:${l.x * 100}%;top:${l.y * 100}%;--c:${l.color}">${l.star ? "⭐ " : ""}${esc((l.text || "").trim() || "escribe…")}</div>
       ${mode === "edit" && l.tx != null ? `<div class="tip" data-id="${l.id}" style="left:${l.tx * 100}%;top:${l.ty * 100}%"></div>` : ""}`).join("")
       + (mode === "edit" ? todos.filter((t) => t.tx != null).map((t) => `
       <div class="qmark ${t.id === selMark ? "sel" : ""}" data-id="${t.id}" style="left:${t.tx * 100}%;top:${t.ty * 100}%">?${(t.text || "").trim() ? `<span class="qguess">¿${esc(t.text.trim())}?</span>` : ""}</div>`).join("") : "");
@@ -787,6 +795,7 @@ async function renderViewer(imgId, mode) {
     return { ax: cx + dx * t, ay: cy + dy * t, bx: ex, by: ey };
   }
   const geom = (l, cx = l.x * baseW, cy = l.y * baseH) => {
+    if (isRect(l)) return { l, rect: { x1: (l.x - l.w / 2) * baseW, y1: (l.y - l.h / 2) * baseH, x2: (l.x + l.w / 2) * baseW, y2: (l.y + l.h / 2) * baseH }, seg: null };
     const sz = sizeOf(l);
     return { l, rect: rectAt(cx, cy, sz), seg: segFrom(cx, cy, sz, l) };
   };
@@ -904,9 +913,10 @@ async function renderViewer(imgId, mode) {
   function setMode(m) {
     if (mode === "edit" && m !== "edit") deselect();
     mode = m;
+    $(".viewer").dataset.mode = m;
     history.replaceState(null, "", `#/img/${img.id}/${m}`);
     $("#seg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
-    if (m !== "edit") placing = markMode = selMark = null;
+    if (m !== "edit") placing = markMode = selMark = rectMode = null;
     if (m === "study") revealed.clear();
     if (m === "quiz") startQuiz();
     else quiz = null;
@@ -918,20 +928,31 @@ async function renderViewer(imgId, mode) {
   $("#seg").onclick = (e) => {
     const m = e.target.closest("button")?.dataset.m;
     if (m && m !== mode) {
-      if (m !== "edit" && !withText(labels).length) return toast("Primero agrega rótulos en Editar.");
+      if (m !== "edit" && !withText(labels).length) return toast("Primero agrega rótulos o recuadros en Editar.");
       session = null;
       setMode(m);
     }
   };
   $("#back").onclick = () => go(`#/deck/${img.deck_id}`);
 
+  function wireStar() {
+    tools.querySelector("#starOnly")?.addEventListener("click", () => {
+      onlyStar = !onlyStar;
+      pref.set("onlyStar", onlyStar ? "1" : "0");
+      if (mode === "quiz") return setMode("quiz");
+      renderTools();
+      renderLabels();
+    });
+  }
   function renderTools() {
     if (mode === "edit") {
       tools.innerHTML = `
         ${placing ? `<span class="hint placing">📍 Toca en la imagen dónde está <b>“${esc(todos.find((t) => t.id === placing)?.text)}”</b></span>
           <button class="btn small" id="cancelPlace">Cancelar</button>`
         : markMode ? `<span class="hint placing">❓ Toca donde está la estructura que quieres preguntar en clase</span>`
+        : rectMode ? `<span class="hint placing">▭ Arrastra el dedo sobre un nombre impreso para taparlo</span>`
         : `<span class="hint">👆 Toca la estructura para poner un rótulo · arrastra el rótulo o la punta ⚪ para moverlos</span>`}
+        <button class="btn small ${rectMode ? "primary" : ""}" id="rectBtn">▭ ${rectMode ? "Tapando… (tocar para terminar)" : "Tapar texto"}</button>
         <button class="btn small ${markMode ? "primary" : ""}" id="markBtn">❓ ${markMode ? "Marcando… (tocar para terminar)" : "Marcar duda"}</button>
         <button class="btn small ${todos.length ? "sky" : ""}" id="todoBtn">📝 Dudas${todos.length ? ` (${todos.length})` : ""}</button>
         ${(() => { const n = baseW ? countProblems() : 0; return n ? `<span class="warn">⚠️ ${n} cruce${n === 1 ? "" : "s"}</span>` : ""; })()}
@@ -944,8 +965,16 @@ async function renderViewer(imgId, mode) {
         <button class="btn small danger" id="delImg">🗑 Borrar imagen</button>`;
       tools.querySelector("#undo").onclick = undo;
       tools.querySelector("#tidy").onclick = tidyAll;
+      tools.querySelector("#rectBtn").onclick = () => {
+        rectMode = !rectMode;
+        markMode = false;
+        placing = null;
+        if (sel) deselect();
+        renderTools();
+      };
       tools.querySelector("#markBtn").onclick = () => {
         markMode = !markMode;
+        rectMode = false;
         placing = null;
         if (sel) deselect();
         renderTools();
@@ -986,11 +1015,14 @@ async function renderViewer(imgId, mode) {
         go(`#/deck/${img.deck_id}`);
       };
     } else if (mode === "study") {
-      const n = withText(labels).length;
+      const n = studyPool().length;
+      const hasStar = withText(labels).some((l) => l.star);
       tools.innerHTML = `
-        <span class="hint">Toca un rectángulo para destapar · ${revealed.size}/${n} a la vista</span>
+        <span class="hint">Toca un rectángulo para destapar · ${studyPool().filter((l) => revealed.has(l.id)).length}/${n} a la vista</span>
+        ${hasStar ? `<button class="btn small ${onlyStar ? "primary" : ""}" id="starOnly">⭐ ${onlyStar ? "Solo importantes" : "Todos"}</button>` : ""}
         <button class="btn small" id="showAll">👁 Mostrar todo</button>
         <button class="btn small" id="hideAll">🙈 Tapar todo</button>`;
+      wireStar();
       tools.querySelector("#showAll").onclick = () => {
         withText(labels).forEach((l) => revealed.add(l.id));
         renderTools();
@@ -1008,12 +1040,14 @@ async function renderViewer(imgId, mode) {
       tools.innerHTML = `
         <span class="hint">${session ? `Imagen ${session.idx + 1} de ${session.ids.length} · ` : ""}Rótulo ${Math.min(done + 1, total)} de ${total}
         · ✓ ${ok} · ✗ ${done - ok}</span>
+        ${(() => { const hasStar = withText(labels).some((l) => l.star); return `${hasStar ? `<button class="btn small ${onlyStar ? "primary" : ""}" id="starOnly">⭐ ${onlyStar ? "Solo importantes" : "Todos"}</button>` : ""}`; })()}
         <div class="seg" id="qtype">
           <button data-t="write" class="${quizType === "write" ? "on" : ""}">✍️ Escribir</button>
           <button data-t="choice" class="${quizType === "choice" ? "on" : ""}">🔘 Opciones</button>
         </div>
         ${session ? "" : `<button class="btn small" id="restart">↺ Reiniciar</button>`}`;
       tools.querySelector("#restart")?.addEventListener("click", () => setMode("quiz"));
+      wireStar();
       tools.querySelector("#qtype").onclick = (e) => {
         const t = e.target.closest("button")?.dataset.t;
         if (!t || t === quizType) return;
@@ -1136,7 +1170,7 @@ async function renderViewer(imgId, mode) {
     if (!sel) return;
     const l = labels.find((x) => x.id === sel);
     sel = null;
-    if (l && !(l.text || "").trim()) labels.splice(labels.indexOf(l), 1);
+    if (l && !(l.text || "").trim() && !isRect(l)) labels.splice(labels.indexOf(l), 1);
     renderLabels();
     if (l?.auto && (l.text || "").trim()) {
       placeSmart(l); // ya sabemos el largo del texto: reubicar sin cruces
@@ -1196,12 +1230,14 @@ async function renderViewer(imgId, mode) {
       const l = labels.find((x) => x.id === sel);
       bottom.innerHTML = `
         <div class="sheet">
-          <input class="input" id="lblText" value="${esc(l.text || "")}" placeholder="Nombre de la estructura (ej: Radio)"
+          ${isRect(l) ? `<b>▭ Recuadro que tapa texto</b>` : ""}
+          <input class="input" id="lblText" value="${esc(l.text || "")}" placeholder="${isRect(l) ? "¿Qué dice debajo? (opcional, para el quiz)" : "Nombre de la estructura (ej: Radio)"}"
             autocomplete="off" autocapitalize="sentences" enterkeyhint="done" />
           <input class="input" id="lblNote" value="${esc(l.note || "")}" placeholder="💡 Pista o nota (opcional)" autocomplete="off" enterkeyhint="done" />
           <div class="row">
             <div class="colors">${COLORS.map((c) => `<button class="color ${c === l.color ? "on" : ""}" style="--c:${c}" data-c="${c}" aria-label="color"></button>`).join("")}</div>
-            <label class="switch"><input type="checkbox" id="arrow" ${l.tx != null ? "checked" : ""}/> Flecha</label>
+            <label class="switch"><input type="checkbox" id="star" ${l.star ? "checked" : ""}/> ⭐ Importante</label>
+            ${isRect(l) ? "" : `<label class="switch"><input type="checkbox" id="arrow" ${l.tx != null ? "checked" : ""}/> Flecha</label>`}
           </div>
           <div class="row">
             <button class="btn danger" id="delLbl">Eliminar</button>
@@ -1227,9 +1263,10 @@ async function renderViewer(imgId, mode) {
       input.oninput = () => {
         firstEdit();
         l.text = input.value;
+        if (isRect(l)) return renderLabels(), scheduleSave();
         const el = lbls.querySelector(`.lbl[data-id="${l.id}"]`);
         if (el) {
-          el.textContent = input.value.trim() || "escribe…";
+          el.textContent = (l.star ? "⭐ " : "") + (input.value.trim() || "escribe…");
           el.classList.toggle("empty-text", !input.value.trim());
         }
         drawArrows();
@@ -1243,7 +1280,13 @@ async function renderViewer(imgId, mode) {
         renderBottom();
         scheduleSave();
       }));
-      bottom.querySelector("#arrow").onchange = (e) => {
+      bottom.querySelector("#star").onchange = (e) => {
+        snap();
+        l.star = e.target.checked || undefined;
+        renderLabels();
+        scheduleSave();
+      };
+      bottom.querySelector("#arrow")?.addEventListener("change", (e) => {
         snap();
         if (e.target.checked) {
           l.tx = clamp(l.x, 0, 1);
@@ -1251,7 +1294,7 @@ async function renderViewer(imgId, mode) {
         } else l.tx = l.ty = null;
         renderLabels();
         scheduleSave();
-      };
+      });
       bottom.querySelector("#delLbl").onclick = () => {
         if ((l.text || "").trim()) snap();
         labels.splice(labels.indexOf(l), 1);
@@ -1269,7 +1312,7 @@ async function renderViewer(imgId, mode) {
 
   /* ---------- Quiz ---------- */
   function startQuiz() {
-    let pool = withText(labels);
+    let pool = withText(labels).filter((l) => !onlyStar || l.star || !withText(labels).some((x) => x.star));
     if (session?.hardOnly) {
       const h = pool.filter(isHard);
       if (h.length) pool = h;
@@ -1286,6 +1329,44 @@ async function renderViewer(imgId, mode) {
       bottom.querySelector("#hint")?.addEventListener("click", (e) => {
         e.currentTarget.outerHTML = `<span class="note">💡 ${esc(cur.note)}</span>`;
       });
+    // Recuadro sin nombre: te autoevalúas (piensas la respuesta, destapas y dices si la sabías)
+    if (!(cur.text || "").trim()) {
+      const go2 = (good) => {
+        cur.ok = (cur.ok || 0) + (good ? 1 : 0);
+        cur.fail = (cur.fail || 0) + (good ? 0 : 1);
+        cur.last = good;
+        cur.seen = todayStr();
+        if (session) good ? session.ok++ : session.fail++;
+        quiz.results[cur.id] = good ? "right" : "wrong";
+        quiz.peekId = null;
+        quiz.i++;
+        scheduleSave();
+        renderTools();
+        renderBottom();
+        renderLabels();
+      };
+      bottom.innerHTML = quiz.peekId !== cur.id ? `
+        <div class="quizbar">
+          <div class="row"><span class="fb" style="margin-right:auto">¿Qué hay debajo del recuadro que parpadea? Piénsalo o dilo en voz alta.</span>${hintBtn}</div>
+          <div class="row" style="justify-content:flex-end"><button class="btn primary" id="peek">👁 Destapar</button></div>
+        </div>` : `
+        <div class="quizbar">
+          <div class="fb">¿Lo sabías?</div>
+          <div class="row" style="justify-content:flex-end">
+            <button class="btn bad" id="selfNo">✗ No lo sabía</button>
+            <button class="btn good" id="selfYes">✓ Lo sabía</button>
+          </div>
+        </div>`;
+      wireHint();
+      bottom.querySelector("#peek")?.addEventListener("click", () => {
+        quiz.peekId = cur.id;
+        renderLabels();
+        renderBottom();
+      });
+      bottom.querySelector("#selfNo")?.addEventListener("click", () => go2(false));
+      bottom.querySelector("#selfYes")?.addEventListener("click", () => go2(true));
+      return;
+    }
     if (!quiz.answered && quizType === "choice") {
       const opts = (quiz.options[cur.id] ??= buildChoices(cur));
       if (opts) {
@@ -1358,7 +1439,7 @@ async function renderViewer(imgId, mode) {
   function buildChoices(cur) {
     const seen = new Set([norm(cur.text)]);
     const pool = [];
-    for (const t of [...withText(labels), ...deckImgs.flatMap((i) => withText(i.labels))].map((l) => l.text.trim())) {
+    for (const t of [...withText(labels), ...deckImgs.flatMap((i) => withText(i.labels))].filter((l) => (l.text || "").trim()).map((l) => l.text.trim())) {
       const k = norm(t);
       if (!seen.has(k)) { seen.add(k); pool.push(t); }
     }
@@ -1432,11 +1513,13 @@ async function renderViewer(imgId, mode) {
       return;
     }
     if (pointers.size > 2) return;
-    const tip = e.target.closest(".tip"), lb = e.target.closest(".lbl"), qm = mode === "edit" && e.target.closest(".qmark");
-    const kind = qm ? "qmark" : tip ? "tip" : lb ? "lbl" : "bg";
-    const id = (qm || tip || lb)?.dataset.id;
+    const tip = e.target.closest(".tip"), qm = mode === "edit" && e.target.closest(".qmark");
+    const rh = mode === "edit" && e.target.closest(".rh"), lb = e.target.closest(".lbl, .occ");
+    let kind = qm ? "qmark" : rh ? "rh" : tip ? "tip" : lb ? "lbl" : "bg";
+    if (kind === "bg" && mode === "edit" && rectMode) kind = "draw";
+    const id = (qm || rh || tip || lb)?.dataset.id;
     const l = kind === "qmark" ? todos.find((x) => x.id === id) : labels.find((x) => x.id === id);
-    g = { type: "tap", kind, id, x0: e.clientX, y0: e.clientY, moved: false, v0: { ...view }, l0: l ? { ...l } : null };
+    g = { type: "tap", kind, id, x0: e.clientX, y0: e.clientY, moved: false, v0: { ...view }, l0: l ? { ...l } : null, p0: toNorm(e.clientX, e.clientY) };
   });
   stage.addEventListener("pointermove", (e) => {
     if (!pointers.has(e.pointerId)) return;
@@ -1453,6 +1536,34 @@ async function renderViewer(imgId, mode) {
       if (Math.hypot(dx, dy) < 6) return;
       g.moved = true;
       if (mode === "edit" && g.kind !== "bg" && g.kind !== "qmark" && g.id) snap();
+      if (g.kind === "draw") snap();
+    }
+    if (g.kind === "draw") {
+      const p = toNorm(e.clientX, e.clientY);
+      const x1 = clamp(Math.min(p.x, g.p0.x), 0, 1), x2 = clamp(Math.max(p.x, g.p0.x), 0, 1);
+      const y1 = clamp(Math.min(p.y, g.p0.y), 0, 1), y2 = clamp(Math.max(p.y, g.p0.y), 0, 1);
+      g.rect = { x1, y1, x2, y2 };
+      let d = lbls.querySelector(".occ.drawing");
+      if (!d) {
+        d = document.createElement("div");
+        d.className = "occ drawing";
+        d.style.setProperty("--c", lastColor);
+        lbls.appendChild(d);
+      }
+      Object.assign(d.style, { left: x1 * 100 + "%", top: y1 * 100 + "%", width: (x2 - x1) * 100 + "%", height: (y2 - y1) * 100 + "%" });
+      return;
+    }
+    if (g.kind === "rh") {
+      const r = labels.find((x) => x.id === g.id);
+      if (!r) return;
+      const left = g.l0.x - g.l0.w / 2, top = g.l0.y - g.l0.h / 2;
+      r.w = clamp(g.l0.w + dx / (baseW * view.s), 0.02, 1 - left);
+      r.h = clamp(g.l0.h + dy / (baseH * view.s), 0.015, 1 - top);
+      r.x = left + r.w / 2;
+      r.y = top + r.h / 2;
+      const el = lbls.querySelector(`.occ[data-id="${r.id}"]`);
+      if (el) Object.assign(el.style, { width: r.w * 100 + "%", height: r.h * 100 + "%" });
+      return;
     }
     if (mode === "edit" && g.kind === "qmark") {
       const t = todos.find((x) => x.id === g.id);
@@ -1468,7 +1579,10 @@ async function renderViewer(imgId, mode) {
       l.x = clamp(g.l0.x + dx / (baseW * view.s), 0, 1);
       l.y = clamp(g.l0.y + dy / (baseH * view.s), 0, 1);
       delete l.auto;
-      updateLabelEl(l);
+      if (isRect(l)) {
+        const el = lbls.querySelector(`.occ[data-id="${l.id}"]`);
+        if (el) Object.assign(el.style, { left: (l.x - l.w / 2) * 100 + "%", top: (l.y - l.h / 2) * 100 + "%" });
+      } else updateLabelEl(l);
     } else if (mode === "edit" && l && g.kind === "tip") {
       l.tx = clamp(g.l0.tx + dx / (baseW * view.s), 0, 1);
       l.ty = clamp(g.l0.ty + dy / (baseH * view.s), 0, 1);
@@ -1485,6 +1599,19 @@ async function renderViewer(imgId, mode) {
     if (!g) return;
     if (g.type === "pinch") {
       if (pointers.size === 0) g = null;
+      return;
+    }
+    if (g.kind === "draw" && g.moved) {
+      lbls.querySelector(".occ.drawing")?.remove();
+      const r = g.rect;
+      if (r && (r.x2 - r.x1) * baseW > 12 && (r.y2 - r.y1) * baseH > 8) {
+        const l = { id: newId(), shape: "rect", text: "", color: lastColor, x: (r.x1 + r.x2) / 2, y: (r.y1 + r.y2) / 2, w: r.x2 - r.x1, h: r.y2 - r.y1, ok: 0, fail: 0 };
+        labels.push(l);
+        select(l.id, false, true);
+        renderTools();
+        scheduleSave();
+      } else undoStack.pop();
+      g = null;
       return;
     }
     if (e.type === "pointerup" && !g.moved) onTap(g, e);
@@ -1509,12 +1636,15 @@ async function renderViewer(imgId, mode) {
         renderLabels();
         return renderBottom();
       }
+      if (gg.kind === "draw") gg.kind = "bg";
+      if (gg.kind === "rh") return;
       if (gg.kind !== "bg") {
         if (sel === gg.id) return;
         if (sel) deselect();
         return select(gg.id);
       }
       if (sel) return deselect();
+      if (rectMode) return;
       if (selMark) {
         selMark = null;
         renderLabels();

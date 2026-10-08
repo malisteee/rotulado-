@@ -370,3 +370,32 @@ textarea.input.notes-area { min-height: 280px; }
   padding: .1em .45em; border-radius: .3em; pointer-events: none;
 }
 @keyframes qpulse { 50% { box-shadow: 0 0 0 .35em rgba(156, 201, 255, .35), 0 .1em .4em rgba(0,0,0,.5); } }
+
+/* ---------- Recuadros para tapar texto impreso (atlas tipo Netter) ---------- */
+.occ {
+  --c: #ff9ebb;
+  position: absolute; box-sizing: border-box; border-radius: .15em;
+  background: color-mix(in srgb, var(--c) 40%, transparent);
+  border: .08em dashed color-mix(in srgb, var(--c) 85%, black 15%);
+  touch-action: none; cursor: grab; display: flex; align-items: center; justify-content: center;
+}
+.occ span {
+  font-size: .55em; font-weight: 700; color: #3b2f4a; background: rgba(255,255,255,.88);
+  padding: 0 .3em; border-radius: .2em; white-space: nowrap; pointer-events: none;
+}
+.occ.sel { outline: .1em solid #43395a; outline-offset: .05em; }
+.occ.drawing { pointer-events: none; border-style: solid; }
+.occ.covered { background: var(--c); border-style: solid; cursor: pointer; }
+.occ.active { background: var(--c); border-style: solid; outline: .14em solid #43395a; animation: opulse 1.1s ease-in-out infinite; }
+@keyframes opulse { 50% { outline-color: rgba(67, 57, 90, .15); } }
+.viewer:not([data-mode=edit]) .occ:not(.covered):not(.active) { background: transparent; border-style: solid; }
+.occ.right { border: .1em solid #3fae6f !important; }
+.occ.wrong { border: .1em solid #e06464 !important; }
+.occ.peek { border: .12em solid #43395a !important; }
+.rh {
+  position: absolute; right: -.32em; bottom: -.32em; width: .64em; height: .64em; border-radius: .15em;
+  background: #fff; border: .08em solid #43395a; cursor: nwse-resize; touch-action: none;
+}
+.rh::before { content: ""; position: absolute; inset: -.6em; }
+.stari { position: absolute; top: -.6em; left: -.6em; font-size: .6em; font-style: normal; pointer-events: none; }
+.btn.bad, .btn.good { min-width: 140px; }
