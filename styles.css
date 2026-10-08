@@ -171,11 +171,14 @@ a.icon-btn { color: var(--text); text-decoration: none; }
 .lbl.right { background: #b9f0cf; border-color: #6cc893; color: #1f5a3a; }
 .lbl.wrong { background: #ffc9c9; border-color: #ef8d8d; color: #7a2525; }
 @keyframes pulse { 50% { outline-color: rgba(255,255,255,.15); transform: translate(-50%, -50%) scale(1.06); } }
+/* Punta de la flecha: un aro muy chico y hueco para no tapar estructuras pequeñas
+   (vasos, arterias). El área para tocarla con el dedo es más grande pero invisible. */
 .tip {
-  position: absolute; width: 1.1em; height: 1.1em; border-radius: 50%; transform: translate(-50%, -50%);
-  background: rgba(255,255,255,.35); border: .12em solid #fff; touch-action: none; cursor: move;
-  box-shadow: 0 0 .3em rgba(0,0,0,.5);
+  position: absolute; width: .42em; height: .42em; border-radius: 50%; transform: translate(-50%, -50%);
+  background: transparent; border: .07em solid #fff; touch-action: none; cursor: move;
+  box-shadow: 0 0 0 .05em rgba(0,0,0,.55);
 }
+.tip::before { content: ""; position: absolute; inset: -.7em; border-radius: 50%; }
 
 /* Hoja inferior */
 .sheet {
