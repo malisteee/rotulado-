@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=11";
+import { db, isDemo, localDb } from "./db.js?v=12";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -86,7 +86,16 @@ const isKnown = (l) => l.last === true;
 // "Dudas": estructuras anotadas que todavía no sabes ubicar (se guardan junto a los rótulos)
 const isTodo = (l) => l.kind === "todo";
 const todosOf = (labels) => (labels || []).filter(isTodo);
-const withText = (labels) => (labels || []).filter((l) => !isTodo(l) && (l.text || "").trim());
+const withText = (labels) => (labels || []).filter((l) => !l.kind && (l.text || "").trim());
+// Apuntes libres de la imagen (también se guardan junto a los rótulos)
+const notesOf = (labels) => (labels || []).find((l) => l.kind === "notes")?.text || "";
+const NOTES_TEMPLATE = `Proyección:
+Posición del paciente:
+Rayo central:
+Criterios de calidad:
+Estructuras que se ven:
+Otros apuntes:
+`;
 function deckStats(images) {
   const labels = images.flatMap((i) => withText(i.labels));
   const known = labels.filter(isKnown).length;
@@ -508,7 +517,7 @@ async function renderDeck(deckId) {
       return `<button class="thumb" data-id="${im.id}">
         <div class="ph" style="background-image:url('${esc(urls[i])}')"></div>
         <div class="meta"><b>${esc(im.title || "Sin título")}</b>
-        <small>${ls.length} rótulo${ls.length === 1 ? "" : "s"}${hard ? ` · <i class="dot"></i>${hard}` : ""}${todosOf(im.labels).length ? ` · 📝 ${todosOf(im.labels).length}` : ""}</small></div>
+        <small>${ls.length} rótulo${ls.length === 1 ? "" : "s"}${hard ? ` · <i class="dot"></i>${hard}` : ""}${todosOf(im.labels).length ? ` · 📝 ${todosOf(im.labels).length}` : ""}${notesOf(im.labels).trim() ? " · 🗒" : ""}</small></div>
       </button>`;
     }).join("")}</div>`
     : `<div class="empty"><div class="big">🩻</div><p>Sube tus radiografías (puedes elegir varias a la vez).</p></div>`}
@@ -622,7 +631,9 @@ async function renderViewer(imgId, mode) {
   const undoStack = []; // deshacer
   let preEdit = null;
   const allLabels = (img.labels || []).map((l) => ({ ...l }));
-  const labels = allLabels.filter((l) => !isTodo(l));
+  const labels = allLabels.filter((l) => !l.kind);
+  let notesText = notesOf(allLabels);
+  let notesOpen = false;
   const todos = allLabels.filter(isTodo);
   let placing = null; // duda que estás ubicando en la imagen
   let todoOpen = false;
@@ -638,6 +649,7 @@ async function renderViewer(imgId, mode) {
       <div class="seg" id="seg">
         <button data-m="edit">Editar</button><button data-m="study">Estudiar</button><button data-m="quiz">Quiz</button>
       </div>
+      <button class="btn small ${notesText.trim() ? "sky" : ""}" id="notesBtn">🗒 Apuntes</button>
       <span class="save-state" id="saveState"></span>
     </div>
     <div class="tools" id="tools"></div>
@@ -651,6 +663,7 @@ async function renderViewer(imgId, mode) {
     </div>
     <div id="bottom"></div>
     <div id="todoPanel"></div>
+    <div id="notesPanel"></div>
   </div>`;
 
   const $ = (s) => $app.querySelector(s);
@@ -675,7 +688,8 @@ async function renderViewer(imgId, mode) {
     try {
       await db.updateImage(img.id, {
         title: titleVal.trim(),
-        labels: [...labels.filter((l) => (l.text || "").trim() || l.id === sel), ...todos],
+        labels: [...labels.filter((l) => (l.text || "").trim() || l.id === sel), ...todos,
+          ...(notesText.trim() ? [{ id: "notes", kind: "notes", text: notesText }] : [])],
         label_size: labelSize,
       });
       setSave("Guardado ✓");
@@ -926,6 +940,7 @@ async function renderViewer(imgId, mode) {
       tools.querySelector("#tidy").onclick = tidyAll;
       tools.querySelector("#todoBtn").onclick = () => {
         todoOpen = !todoOpen;
+        if (todoOpen && notesOpen) { notesOpen = false; renderNotes(); }
         renderTodo();
       };
       tools.querySelector("#cancelPlace")?.addEventListener("click", () => {
@@ -997,6 +1012,39 @@ async function renderViewer(imgId, mode) {
       };
     }
   }
+
+  /* ---------- Apuntes de la imagen ---------- */
+  function renderNotes() {
+    const panel = $("#notesPanel");
+    $("#notesBtn").classList.toggle("sky", !!notesText.trim());
+    if (!notesOpen) return (panel.innerHTML = "");
+    panel.innerHTML = `
+      <div class="todo-panel notes-panel">
+        <div class="row" style="justify-content:space-between"><b>🗒 Apuntes de esta radiografía</b>
+          <button class="icon-btn" id="notesClose" aria-label="Cerrar">✕</button></div>
+        <textarea class="input area notes-area" id="notesArea" placeholder="Escribe lo que quieras recordar de esta imagen: proyección, posición, criterios de calidad, lo que dijo el profe…">${esc(notesText)}</textarea>
+        <div class="row" style="justify-content:space-between">
+          <button class="btn small" id="notesTpl">📋 Usar plantilla</button>
+          <small class="muted">Se guarda solo</small>
+        </div>
+      </div>`;
+    const area = panel.querySelector("#notesArea");
+    area.oninput = () => {
+      notesText = area.value;
+      $("#notesBtn").classList.toggle("sky", !!notesText.trim());
+      scheduleSave();
+    };
+    panel.querySelector("#notesClose").onclick = () => { notesOpen = false; renderNotes(); };
+    panel.querySelector("#notesTpl").onclick = () => {
+      area.value = notesText.trim() ? notesText.replace(/\s*$/, "\n\n") + NOTES_TEMPLATE : NOTES_TEMPLATE;
+      area.oninput();
+    };
+  }
+  $("#notesBtn").onclick = () => {
+    notesOpen = !notesOpen;
+    if (notesOpen && todoOpen) { todoOpen = false; renderTodo(); }
+    renderNotes();
+  };
 
   /* ---------- Dudas para clase ---------- */
   function renderTodo() {

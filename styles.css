@@ -351,3 +351,4 @@ pre.code { background: #2d2640; color: #f3eefc; padding: 14px; border-radius: 12
 .vend { text-align: center; padding: 40px 0; display: grid; gap: 16px; }
 .vend .big { font-size: 56px; }
 a.btn { text-decoration: none; }
+textarea.input.notes-area { min-height: 280px; }
