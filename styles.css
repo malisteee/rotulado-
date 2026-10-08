@@ -399,3 +399,16 @@ textarea.input.notes-area { min-height: 280px; }
 .rh::before { content: ""; position: absolute; inset: -.6em; }
 .stari { position: absolute; top: -.6em; left: -.6em; font-size: .6em; font-style: normal; pointer-events: none; }
 .btn.bad, .btn.good { min-width: 140px; }
+
+/* ---------- Barra de herramientas en varias líneas y botones de zoom ---------- */
+.tools { flex-wrap: wrap; overflow: visible; row-gap: 6px; }
+.tools .hint { white-space: normal; min-width: 180px; }
+.tools label.size { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px 10px; }
+.tools input[type=range] { width: 130px; }
+.zoomctl {
+  position: absolute; right: 12px; bottom: calc(12px + var(--safe-bottom)); z-index: 5;
+  display: grid; gap: 6px;
+}
+.zoomctl .icon-btn { width: 48px; height: 48px; font-size: 22px; font-weight: 700; box-shadow: var(--shadow); }
+.zoomctl #zFit.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.qmark { width: 1.15em; height: 1.15em; font-size: .9em; }

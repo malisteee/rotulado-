@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=17";
+import { db, isDemo, localDb } from "./db.js?v=18";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -690,7 +690,11 @@ async function renderViewer(imgId, mode) {
         <svg id="arrows"></svg>
         <div id="lbls"></div>
       </div>
-      <button class="btn small zoom-reset" id="zoomReset" hidden>Ajustar ⤢</button>
+      <div class="zoomctl" id="zoomctl">
+        <button class="icon-btn" id="zIn" aria-label="Acercar">＋</button>
+        <button class="icon-btn" id="zOut" aria-label="Alejar">－</button>
+        <button class="icon-btn" id="zFit" aria-label="Ajustar a la pantalla">⤢</button>
+      </div>
     </div>
     <div id="bottom"></div>
     <div id="todoPanel"></div>
@@ -755,17 +759,23 @@ async function renderViewer(imgId, mode) {
   }
   function applyView() {
     canvas.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.s})`;
-    $("#zoomReset").hidden = view.s < 1.02;
+    $("#zFit").classList.toggle("on", view.s > 1.02);
   }
   function zoomAt(clientX, clientY, s) {
     const r = stage.getBoundingClientRect();
     const cx = (clientX - r.left - view.tx) / view.s, cy = (clientY - r.top - view.ty) / view.s;
-    view.s = clamp(s, 1, 8);
+    view.s = clamp(s, 1, 10);
     view.tx = clientX - r.left - view.s * cx;
     view.ty = clientY - r.top - view.s * cy;
     applyView();
   }
-  $("#zoomReset").onclick = fit;
+  $("#zFit").onclick = fit;
+  const zoomCenter = (k) => {
+    const r = stage.getBoundingClientRect();
+    zoomAt(r.left + r.width / 2, r.top + r.height / 2, view.s * k);
+  };
+  $("#zIn").onclick = () => zoomCenter(1.5);
+  $("#zOut").onclick = () => zoomCenter(1 / 1.5);
   const toNorm = (clientX, clientY) => {
     const r = canvas.getBoundingClientRect();
     return { x: (clientX - r.left) / r.width, y: (clientY - r.top) / r.height };
@@ -973,29 +983,29 @@ async function renderViewer(imgId, mode) {
       tools.innerHTML = `
         ${placing ? `<span class="hint placing">📍 Toca en la imagen dónde está <b>“${esc(todos.find((t) => t.id === placing)?.text)}”</b></span>
           <button class="btn small" id="cancelPlace">Cancelar</button>`
-        : markMode ? `<span class="hint placing">❓ Toca donde está la estructura que quieres preguntar en clase</span>`
-        : rectMode ? `<span class="hint placing">▭ Arrastra el dedo sobre un nombre impreso para taparlo</span>`
-        : `<span class="hint">👆 Toca la estructura para poner un rótulo · arrastra el rótulo o la punta ⚪ para moverlos</span>`}
-        <button class="btn small ${rectMode ? "primary" : ""}" id="rectBtn">▭ ${rectMode ? "Tapando… (tocar para terminar)" : "Tapar texto"}</button>
-        <button class="btn small ${markMode ? "primary" : ""}" id="markBtn">❓ ${markMode ? "Marcando… (tocar para terminar)" : "Marcar duda"}</button>
+        : markMode ? `<span class="hint placing">❓ Toca la estructura que quieres preguntar</span>`
+        : rectMode ? `<span class="hint placing">▭ Arrastra sobre un nombre para taparlo</span>`
+        : `<span class="hint">👆 Toca la estructura para rotular</span>`}
+        ${vKind === "atlas" ? `<button class="btn small ${rectMode ? "primary" : ""}" id="rectBtn">▭ ${rectMode ? "Tapando ✓" : "Tapar texto"}</button>` : ""}
+        <button class="btn small ${markMode ? "primary" : ""}" id="markBtn">❓ ${markMode ? "Marcando ✓" : "Marcar duda"}</button>
         <button class="btn small ${todos.length ? "sky" : ""}" id="todoBtn">📝 Dudas${todos.length ? ` (${todos.length})` : ""}</button>
         ${(() => { const n = baseW ? countProblems() : 0; return n ? `<span class="warn">⚠️ ${n} cruce${n === 1 ? "" : "s"}</span>` : ""; })()}
-        <button class="btn small" id="tidy">🪄 Ordenar rótulos</button>
+        ${labels.some((l) => l.tx != null) ? `<button class="btn small" id="tidy">🪄 Ordenar</button>` : ""}
         <button class="btn small" id="undo" ${undoStack.length ? "" : "disabled"}>↶ Deshacer</button>
         <label class="size">Aa <input type="range" id="size" min="0.5" max="2" step="0.1" value="${labelSize}" /></label>
         <select id="move" aria-label="Mover a carpeta">
           ${allDecks.map((d) => `<option value="${d.id}" ${d.id === img.deck_id ? "selected" : ""}>${KIND[deckKind(d)].icon} ${esc(deckName(d))}</option>`).join("")}
         </select>
-        <button class="btn small danger" id="delImg">🗑 Borrar imagen</button>`;
+        <button class="btn small danger" id="delImg" aria-label="Borrar imagen">🗑</button>`;
       tools.querySelector("#undo").onclick = undo;
-      tools.querySelector("#tidy").onclick = tidyAll;
-      tools.querySelector("#rectBtn").onclick = () => {
+      tools.querySelector("#tidy")?.addEventListener("click", tidyAll);
+      tools.querySelector("#rectBtn")?.addEventListener("click", () => {
         rectMode = !rectMode;
         markMode = false;
         placing = null;
         if (sel) deselect();
         renderTools();
-      };
+      });
       tools.querySelector("#markBtn").onclick = () => {
         markMode = !markMode;
         rectMode = false;
@@ -1529,12 +1539,16 @@ async function renderViewer(imgId, mode) {
   const pointers = new Map();
   let g = null;
   stage.addEventListener("pointerdown", (e) => {
-    if (e.target.closest("#zoomReset")) return;
+    if (e.target.closest("#zoomctl")) return;
     stage.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
-      g = { type: "pinch", d0: Math.hypot(a.x - b.x, a.y - b.y), s0: view.s };
+      lbls.querySelector(".occ.drawing")?.remove();
+      const r = stage.getBoundingClientRect();
+      const mx = (a.x + b.x) / 2 - r.left, my = (a.y + b.y) / 2 - r.top;
+      // punto de la imagen que queda bajo los dedos: se mantiene ahí al pellizcar y al deslizar
+      g = { type: "pinch", d0: Math.max(Math.hypot(a.x - b.x, a.y - b.y), 1), s0: view.s, cx: (mx - view.tx) / view.s, cy: (my - view.ty) / view.s };
       return;
     }
     if (pointers.size > 2) return;
@@ -1553,7 +1567,11 @@ async function renderViewer(imgId, mode) {
     if (g.type === "pinch") {
       if (pointers.size < 2) return;
       const [a, b] = [...pointers.values()];
-      zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, (g.s0 * Math.hypot(a.x - b.x, a.y - b.y)) / g.d0);
+      const r = stage.getBoundingClientRect();
+      view.s = clamp((g.s0 * Math.hypot(a.x - b.x, a.y - b.y)) / g.d0, 1, 10);
+      view.tx = (a.x + b.x) / 2 - r.left - view.s * g.cx;
+      view.ty = (a.y + b.y) / 2 - r.top - view.s * g.cy;
+      applyView();
       return;
     }
     const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
