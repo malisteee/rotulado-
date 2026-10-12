@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=18";
+import { db, isDemo, localDb } from "./db.js?v=19";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -99,6 +99,9 @@ const KIND = {
 };
 // Apuntes libres de la imagen (también se guardan junto a los rótulos)
 const notesOf = (labels) => (labels || []).find((l) => l.kind === "notes")?.text || "";
+// Destacador: trazos semitransparentes encima de la imagen
+const HL_COLORS = ["#ffe14d", "#ff7eb6", "#6ff2a0", "#7cc4ff", "#c9a0ff", "#ff9f5a"];
+const HL_WIDTHS = [["Fino", 0.012], ["Medio", 0.025], ["Grueso", 0.045]];
 const NOTES_TEMPLATE_ATLAS = `Origen:
 Inserción:
 Inervación:
@@ -659,6 +662,10 @@ async function renderViewer(imgId, mode) {
   let notesText = notesOf(allLabels);
   let notesOpen = false;
   const todos = allLabels.filter(isTodo);
+  const strokes = allLabels.filter((l) => l.kind === "draw");
+  let drawMode = false, eraser = false;
+  let hlColor = pref.get("hlColor", HL_COLORS[0]);
+  let hlW = +pref.get("hlW", HL_WIDTHS[1][1]);
   let placing = null; // duda que estás ubicando en la imagen
   let markMode = false; // tocar la imagen marca una duda ❓ en vez de rotular
   const vKind = deckKind(allDecks.find((d) => d.id === img.deck_id));
@@ -687,6 +694,7 @@ async function renderViewer(imgId, mode) {
     <div class="stage" id="stage">
       <div class="canvas" id="canvas">
         <img src="${esc(url)}" alt="" draggable="false" />
+        <svg id="hl"></svg>
         <svg id="arrows"></svg>
         <div id="lbls"></div>
       </div>
@@ -723,7 +731,7 @@ async function renderViewer(imgId, mode) {
     try {
       await db.updateImage(img.id, {
         title: titleVal.trim(),
-        labels: [...labels.filter((l) => (l.text || "").trim() || isRect(l) || l.id === sel), ...todos,
+        labels: [...labels.filter((l) => (l.text || "").trim() || isRect(l) || l.id === sel), ...todos, ...strokes,
           ...(notesText.trim() ? [{ id: "notes", kind: "notes", text: notesText }] : [])],
         label_size: labelSize,
       });
@@ -753,9 +761,40 @@ async function renderViewer(imgId, mode) {
     fs = Math.max(baseW * 0.026 * labelSize, 10);
     canvas.style.fontSize = fs + "px";
     svg.setAttribute("viewBox", `0 0 ${baseW} ${baseH}`);
+    $("#hl").setAttribute("viewBox", `0 0 ${baseW} ${baseH}`);
     Object.assign(view, { s: 1, tx: (r.width - baseW) / 2, ty: (r.height - baseH) / 2 });
     applyView();
     drawArrows();
+    drawHL();
+  }
+  // Trazo suave a partir de los puntos (curvas por los puntos medios)
+  function hlPath(pts) {
+    const P = pts.map(([x, y]) => [x * baseW, y * baseH]);
+    if (P.length === 1) P.push([P[0][0] + 0.1, P[0][1]]);
+    let d = `M${P[0][0]},${P[0][1]}`;
+    for (let i = 1; i < P.length - 1; i++) {
+      const mx = (P[i][0] + P[i + 1][0]) / 2, my = (P[i][1] + P[i + 1][1]) / 2;
+      d += ` Q${P[i][0]},${P[i][1]} ${mx},${my}`;
+    }
+    const L = P[P.length - 1];
+    return d + ` L${L[0]},${L[1]}`;
+  }
+  const hlEl = (st, id = "") => `<path ${id} d="${hlPath(st.pts)}" stroke="${st.color}" stroke-width="${st.w * baseW}" />`;
+  function drawHL(live) {
+    if (!baseW) return;
+    $("#hl").innerHTML = strokes.map((st) => hlEl(st)).join("") + (live ? hlEl(live, 'id="hlLive"') : "");
+  }
+  function eraseAt(p) {
+    const tol = 10 / view.s;
+    let changed = false;
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      const st = strokes[i], r = (st.w * baseW) / 2 + tol;
+      if (st.pts.some(([x, y]) => Math.hypot((x - p.x) * baseW, (y - p.y) * baseH) < r)) {
+        strokes.splice(i, 1);
+        changed = true;
+      }
+    }
+    return changed;
   }
   function applyView() {
     canvas.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.s})`;
@@ -950,7 +989,7 @@ async function renderViewer(imgId, mode) {
     $(".viewer").dataset.mode = m;
     history.replaceState(null, "", `#/img/${img.id}/${m}`);
     $("#seg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
-    if (m !== "edit") placing = markMode = selMark = rectMode = null;
+    if (m !== "edit") placing = markMode = selMark = rectMode = drawMode = eraser = null;
     if (m === "study") revealed.clear();
     if (m === "quiz") startQuiz();
     else quiz = null;
@@ -980,6 +1019,33 @@ async function renderViewer(imgId, mode) {
   }
   function renderTools() {
     if (mode === "edit") {
+      if (drawMode) {
+        tools.innerHTML = `
+          <span class="hint placing">🖍 ${eraser ? "Pasa el dedo sobre un trazo para borrarlo" : "Pinta sobre la imagen"}</span>
+          <div class="colors">${HL_COLORS.map((c) => `<button class="color sm ${c === hlColor && !eraser ? "on" : ""}" style="--c:${c}" data-hc="${c}" aria-label="color"></button>`).join("")}</div>
+          <div class="seg" id="hlw">${HL_WIDTHS.map(([n, w]) => `<button data-w="${w}" class="${w === hlW && !eraser ? "on" : ""}">${n}</button>`).join("")}</div>
+          <button class="btn small ${eraser ? "primary" : ""}" id="eraser">🧽 Borrar</button>
+          <button class="btn small" id="undo" ${undoStack.length ? "" : "disabled"}>↶ Deshacer</button>
+          <button class="btn small primary" id="drawBtn">✓ Listo</button>`;
+        tools.querySelectorAll("[data-hc]").forEach((b) => (b.onclick = () => {
+          hlColor = b.dataset.hc;
+          eraser = false;
+          pref.set("hlColor", hlColor);
+          renderTools();
+        }));
+        tools.querySelector("#hlw").onclick = (e) => {
+          const w = e.target.closest("button")?.dataset.w;
+          if (!w) return;
+          hlW = +w;
+          eraser = false;
+          pref.set("hlW", w);
+          renderTools();
+        };
+        tools.querySelector("#eraser").onclick = () => { eraser = !eraser; renderTools(); };
+        tools.querySelector("#undo").onclick = undo;
+        tools.querySelector("#drawBtn").onclick = () => { drawMode = eraser = false; renderTools(); };
+        return;
+      }
       tools.innerHTML = `
         ${placing ? `<span class="hint placing">📍 Toca en la imagen dónde está <b>“${esc(todos.find((t) => t.id === placing)?.text)}”</b></span>
           <button class="btn small" id="cancelPlace">Cancelar</button>`
@@ -987,6 +1053,7 @@ async function renderViewer(imgId, mode) {
         : rectMode ? `<span class="hint placing">▭ Arrastra sobre un nombre para taparlo</span>`
         : `<span class="hint">👆 Toca la estructura para rotular</span>`}
         ${vKind === "atlas" ? `<button class="btn small ${rectMode ? "primary" : ""}" id="rectBtn">▭ ${rectMode ? "Tapando ✓" : "Tapar texto"}</button>` : ""}
+        <button class="btn small" id="drawBtn">🖍 Destacar</button>
         <button class="btn small ${markMode ? "primary" : ""}" id="markBtn">❓ ${markMode ? "Marcando ✓" : "Marcar duda"}</button>
         <button class="btn small ${todos.length ? "sky" : ""}" id="todoBtn">📝 Dudas${todos.length ? ` (${todos.length})` : ""}</button>
         ${(() => { const n = baseW ? countProblems() : 0; return n ? `<span class="warn">⚠️ ${n} cruce${n === 1 ? "" : "s"}</span>` : ""; })()}
@@ -1006,6 +1073,13 @@ async function renderViewer(imgId, mode) {
         if (sel) deselect();
         renderTools();
       });
+      tools.querySelector("#drawBtn").onclick = () => {
+        drawMode = true;
+        markMode = rectMode = false;
+        placing = null;
+        if (sel) deselect();
+        renderTools();
+      };
       tools.querySelector("#markBtn").onclick = () => {
         markMode = !markMode;
         rectMode = false;
@@ -1178,15 +1252,21 @@ async function renderViewer(imgId, mode) {
   }
 
   /* ---------- Hoja de edición del rótulo ---------- */
+  function snapState() {
+    return JSON.stringify({ l: labels, s: strokes });
+  }
   function snap() {
-    undoStack.push(JSON.stringify(labels));
+    undoStack.push(snapState());
     if (undoStack.length > 60) undoStack.shift();
     const u = tools.querySelector("#undo");
     if (u) u.disabled = false;
   }
   function undo() {
     if (!undoStack.length) return;
-    labels.splice(0, labels.length, ...JSON.parse(undoStack.pop()));
+    const st = JSON.parse(undoStack.pop());
+    labels.splice(0, labels.length, ...(Array.isArray(st) ? st : st.l));
+    if (!Array.isArray(st)) strokes.splice(0, strokes.length, ...st.s);
+    drawHL();
     sel = null;
     preEdit = null;
     renderLabels();
@@ -1196,7 +1276,7 @@ async function renderViewer(imgId, mode) {
   }
   function select(id, focus = true, fresh = false) {
     selMark = null;
-    preEdit = fresh ? null : JSON.stringify(labels);
+    preEdit = fresh ? null : snapState();
     sel = id;
     renderLabels();
     renderBottom(focus);
@@ -1545,6 +1625,8 @@ async function renderViewer(imgId, mode) {
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       lbls.querySelector(".occ.drawing")?.remove();
+      $("#hlLive")?.remove();
+      if (g?.erased) scheduleSave();
       const r = stage.getBoundingClientRect();
       const mx = (a.x + b.x) / 2 - r.left, my = (a.y + b.y) / 2 - r.top;
       // punto de la imagen que queda bajo los dedos: se mantiene ahí al pellizcar y al deslizar
@@ -1556,6 +1638,18 @@ async function renderViewer(imgId, mode) {
     const rh = mode === "edit" && e.target.closest(".rh"), lb = e.target.closest(".lbl, .occ");
     let kind = qm ? "qmark" : rh ? "rh" : tip ? "tip" : lb ? "lbl" : "bg";
     if (kind === "bg" && mode === "edit" && rectMode) kind = "draw";
+    if (mode === "edit" && drawMode) {
+      const p = toNorm(e.clientX, e.clientY);
+      if (eraser) {
+        const before = snapState();
+        g = { type: "erase", erased: false, before };
+        if (eraseAt(p)) { g.erased = true; undoStack.push(before); drawHL(); }
+      } else {
+        g = { type: "hl", st: { id: newId(), kind: "draw", color: hlColor, w: hlW, pts: [[p.x, p.y]] }, lx: e.clientX, ly: e.clientY };
+        drawHL(g.st);
+      }
+      return;
+    }
     const id = (qm || rh || tip || lb)?.dataset.id;
     const l = kind === "qmark" ? todos.find((x) => x.id === id) : labels.find((x) => x.id === id);
     g = { type: "tap", kind, id, x0: e.clientX, y0: e.clientY, moved: false, v0: { ...view }, l0: l ? { ...l } : null, p0: toNorm(e.clientX, e.clientY) };
@@ -1564,6 +1658,23 @@ async function renderViewer(imgId, mode) {
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (!g) return;
+    if (g.type === "hl") {
+      if (Math.hypot(e.clientX - g.lx, e.clientY - g.ly) < 3) return;
+      g.lx = e.clientX;
+      g.ly = e.clientY;
+      const p = toNorm(e.clientX, e.clientY);
+      g.st.pts.push([clamp(p.x, 0, 1), clamp(p.y, 0, 1)]);
+      const live = $("#hlLive");
+      if (live) live.setAttribute("d", hlPath(g.st.pts));
+      return;
+    }
+    if (g.type === "erase") {
+      if (eraseAt(toNorm(e.clientX, e.clientY))) {
+        if (!g.erased) { g.erased = true; undoStack.push(g.before); }
+        drawHL();
+      }
+      return;
+    }
     if (g.type === "pinch") {
       if (pointers.size < 2) return;
       const [a, b] = [...pointers.values()];
@@ -1642,6 +1753,22 @@ async function renderViewer(imgId, mode) {
     if (!g) return;
     if (g.type === "pinch") {
       if (pointers.size === 0) g = null;
+      return;
+    }
+    if (g.type === "hl") {
+      const st = g.st;
+      st.pts = st.pts.map(([x, y]) => [Math.round(x * 1e4) / 1e4, Math.round(y * 1e4) / 1e4]);
+      undoStack.push(snapState());
+      strokes.push(st);
+      drawHL();
+      scheduleSave();
+      renderTools();
+      g = null;
+      return;
+    }
+    if (g.type === "erase") {
+      if (g.erased) { scheduleSave(); renderTools(); }
+      g = null;
       return;
     }
     if (g.kind === "draw" && g.moved) {

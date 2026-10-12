@@ -412,3 +412,7 @@ textarea.input.notes-area { min-height: 280px; }
 .zoomctl .icon-btn { width: 48px; height: 48px; font-size: 22px; font-weight: 700; box-shadow: var(--shadow); }
 .zoomctl #zFit.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .qmark { width: 1.15em; height: 1.15em; font-size: .9em; }
+
+/* ---------- Destacador ---------- */
+#hl path { fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .42; }
+.color.sm { width: 28px; height: 28px; }
