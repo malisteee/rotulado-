@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=20";
+import { db, isDemo, localDb } from "./db.js?v=21";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -664,7 +664,7 @@ async function renderViewer(imgId, mode) {
   const todos = allLabels.filter(isTodo);
   const strokes = allLabels.filter((l) => l.kind === "draw");
   let drawMode = false, eraser = false;
-  let arrowLen = +pref.get("arrowLen", "0.17"); // fracción del alto/ancho de la imagen
+  const arrowLen = 0.17; // largo inicial cuando solo tocas (si arrastras, el largo lo decides tú)
   let hlColor = pref.get("hlColor", HL_COLORS[0]);
   let hlW = +pref.get("hlW", HL_WIDTHS[1][1]);
   let placing = null; // duda que estás ubicando en la imagen
@@ -1053,15 +1053,13 @@ async function renderViewer(imgId, mode) {
           <button class="btn small" id="cancelPlace">Cancelar</button>`
         : markMode ? `<span class="hint placing">❓ Toca la estructura que quieres preguntar</span>`
         : rectMode ? `<span class="hint placing">▭ Arrastra sobre un nombre para taparlo</span>`
-        : `<span class="hint">👆 Toca la estructura para rotular</span>`}
+        : `<span class="hint">👆 Pon el dedo en la estructura y arrastra hasta donde quieres el nombre</span>`}
         ${vKind === "atlas" ? `<button class="btn small ${rectMode ? "primary" : ""}" id="rectBtn">▭ ${rectMode ? "Tapando ✓" : "Tapar texto"}</button>` : ""}
         <button class="btn small" id="drawBtn">🖍 Destacar</button>
         <button class="btn small ${markMode ? "primary" : ""}" id="markBtn">❓ ${markMode ? "Marcando ✓" : "Marcar duda"}</button>
         <button class="btn small ${todos.length ? "sky" : ""}" id="todoBtn">📝 Dudas${todos.length ? ` (${todos.length})` : ""}</button>
         ${(() => { const n = baseW ? countProblems() : 0; return n ? `<span class="warn">⚠️ ${n} cruce${n === 1 ? "" : "s"}</span>` : ""; })()}
-        ${labels.some((l) => l.tx != null) ? `
-        <div class="seg" id="alen" title="Largo de las flechas">${[["Cortas", 0.09], ["Medias", 0.17], ["Largas", 0.26]].map(([n, v]) => `<button data-v="${v}" class="${v === arrowLen ? "on" : ""}">↗ ${n}</button>`).join("")}</div>
-        <button class="btn small" id="tidy">🪄 Ordenar</button>` : ""}
+        ${labels.some((l) => l.tx != null) ? `<button class="btn small" id="tidy">🪄 Ordenar</button>` : ""}
         <button class="btn small" id="undo" ${undoStack.length ? "" : "disabled"}>↶ Deshacer</button>
         <label class="size">Aa <input type="range" id="size" min="0.5" max="2" step="0.1" value="${labelSize}" /></label>
         <select id="move" aria-label="Mover a carpeta">
@@ -1070,13 +1068,6 @@ async function renderViewer(imgId, mode) {
         <button class="btn small danger" id="delImg" aria-label="Borrar imagen">🗑</button>`;
       tools.querySelector("#undo").onclick = undo;
       tools.querySelector("#tidy")?.addEventListener("click", tidyAll);
-      tools.querySelector("#alen")?.addEventListener("click", (e) => {
-        const v = e.target.closest("button")?.dataset.v;
-        if (!v || +v === arrowLen) return;
-        arrowLen = +v;
-        pref.set("arrowLen", v);
-        tidyAll(); // reubica todos los rótulos con el nuevo largo
-      });
       tools.querySelector("#rectBtn")?.addEventListener("click", () => {
         rectMode = !rectMode;
         markMode = false;
@@ -1310,7 +1301,7 @@ async function renderViewer(imgId, mode) {
   // Pasar una duda marcada a rótulo (en el mismo punto)
   function convertMark(t) {
     if (!t) return;
-    const l = { id: newId(), text: (t.text || "").trim(), color: lastColor, x: t.tx, y: t.ty, tx: t.tx, ty: t.ty, ok: 0, fail: 0, auto: true };
+    const l = { id: newId(), text: (t.text || "").trim(), color: lastColor, x: t.tx, y: t.ty, tx: t.tx, ty: t.ty, ok: 0, fail: 0 };
     snap();
     placeSmart(l);
     labels.push(l);
@@ -1752,6 +1743,23 @@ async function renderViewer(imgId, mode) {
       l.tx = clamp(g.l0.tx + dx / (baseW * view.s), 0, 1);
       l.ty = clamp(g.l0.ty + dy / (baseH * view.s), 0, 1);
       updateLabelEl(l);
+    } else if (mode === "edit" && g.kind === "bg" && !markMode) {
+      // Arrastrar desde la estructura: la punta queda donde empezaste y el nombre donde sueltes
+      const p = toNorm(e.clientX, e.clientY);
+      if (!g.newL) {
+        if (g.p0.x < 0 || g.p0.x > 1 || g.p0.y < 0 || g.p0.y > 1) return;
+        if (sel) deselect();
+        if (selMark) { selMark = null; renderBottom(); }
+        snap();
+        const todo = placing && todos.find((t) => t.id === placing);
+        g.newL = { id: newId(), text: todo ? todo.text : "", color: lastColor, x: p.x, y: p.y, tx: g.p0.x, ty: g.p0.y, ok: 0, fail: 0 };
+        if (todo) { todos.splice(todos.indexOf(todo), 1); placing = null; g.todo = todo; }
+        labels.push(g.newL);
+        renderLabels();
+      }
+      g.newL.x = clamp(p.x, 0, 1);
+      g.newL.y = clamp(p.y, 0, 1);
+      updateLabelEl(g.newL);
     } else {
       view.tx = g.v0.tx + dx;
       view.ty = g.v0.ty + dy;
@@ -1793,6 +1801,14 @@ async function renderViewer(imgId, mode) {
         scheduleSave();
       } else undoStack.pop();
       g = null;
+      return;
+    }
+    if (g.newL) {
+      const { newL, todo } = g;
+      g = null;
+      select(newL.id, !todo, true);
+      renderTools();
+      if (todo) toast(`¡Ubicado “${todo.text}”! ✓`);
       return;
     }
     if (e.type === "pointerup" && !g.moved) onTap(g, e);
@@ -1847,7 +1863,7 @@ async function renderViewer(imgId, mode) {
       const l = {
         id: newId(), text: todo ? todo.text : "", color: lastColor,
         x: clamp(p.x + 0.06, 0.08, 0.92), y: clamp(p.y + (p.y > 0.2 ? -0.14 : 0.14), 0.05, 0.95),
-        tx: p.x, ty: p.y, ok: 0, fail: 0, auto: true,
+        tx: p.x, ty: p.y, ok: 0, fail: 0,
       };
       snap();
       placeSmart(l);

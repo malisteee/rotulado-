@@ -11,11 +11,11 @@
   <title>Rotulado</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icon.png" />
-  <link rel="stylesheet" href="styles.css?v=20" />
+  <link rel="stylesheet" href="styles.css?v=21" />
   <script>
     // Si el iPad guardó una copia vieja de la página, la recargamos con la versión nueva.
     (function () {
-      var V = 20;
+      var V = 21;
       fetch("version.json?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.json(); })
         .then(function (j) {
@@ -31,6 +31,6 @@
 <body>
   <div id="app"><div class="loading">Cargando…</div></div>
   <div id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="app.js?v=20"></script>
+  <script type="module" src="app.js?v=21"></script>
 </body>
 </html>
