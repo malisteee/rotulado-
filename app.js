@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=21";
+import { db, isDemo, localDb } from "./db.js?v=22";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -664,6 +664,7 @@ async function renderViewer(imgId, mode) {
   const todos = allLabels.filter(isTodo);
   const strokes = allLabels.filter((l) => l.kind === "draw");
   let drawMode = false, eraser = false;
+  const OUT = 0.6; // cuánto pueden salir los nombres fuera de la imagen
   const arrowLen = 0.17; // largo inicial cuando solo tocas (si arrastras, el largo lo decides tú)
   let hlColor = pref.get("hlColor", HL_COLORS[0]);
   let hlW = +pref.get("hlW", HL_WIDTHS[1][1]);
@@ -754,7 +755,17 @@ async function renderViewer(imgId, mode) {
   const view = { s: 1, tx: 0, ty: 0 };
   function fit() {
     const r = stage.getBoundingClientRect();
-    const k = Math.min(r.width / img.width, r.height / img.height) * 0.97;
+    // Zona a mostrar: la imagen más los nombres que dejaste fuera de ella
+    let bx1 = 0, by1 = 0, bx2 = 1, by2 = 1;
+    for (const l of labels) {
+      if (isRect(l)) continue;
+      bx1 = Math.min(bx1, l.x - 0.12); bx2 = Math.max(bx2, l.x + 0.12);
+      by1 = Math.min(by1, l.y - 0.05); by2 = Math.max(by2, l.y + 0.05);
+    }
+    // En Editar dejamos un margen alrededor para que puedas sacar los nombres fuera de la imagen
+    const m = mode === "edit" ? 0.07 : 0.015;
+    bx1 = Math.min(bx1, -m); by1 = Math.min(by1, -m); bx2 = Math.max(bx2, 1 + m); by2 = Math.max(by2, 1 + m);
+    const k = Math.min(r.width / (img.width * (bx2 - bx1)), r.height / (img.height * (by2 - by1))) * 0.98;
     baseW = img.width * k;
     baseH = img.height * k;
     canvas.style.width = baseW + "px";
@@ -763,7 +774,11 @@ async function renderViewer(imgId, mode) {
     canvas.style.fontSize = fs + "px";
     svg.setAttribute("viewBox", `0 0 ${baseW} ${baseH}`);
     $("#hl").setAttribute("viewBox", `0 0 ${baseW} ${baseH}`);
-    Object.assign(view, { s: 1, tx: (r.width - baseW) / 2, ty: (r.height - baseH) / 2 });
+    Object.assign(view, {
+      s: 1,
+      tx: (r.width - (bx2 - bx1) * baseW) / 2 - bx1 * baseW,
+      ty: (r.height - (by2 - by1) * baseH) / 2 - by1 * baseH,
+    });
     applyView();
     drawArrows();
     drawHL();
@@ -804,7 +819,7 @@ async function renderViewer(imgId, mode) {
   function zoomAt(clientX, clientY, s) {
     const r = stage.getBoundingClientRect();
     const cx = (clientX - r.left - view.tx) / view.s, cy = (clientY - r.top - view.ty) / view.s;
-    view.s = clamp(s, 1, 10);
+    view.s = clamp(s, 0.4, 10);
     view.tx = clientX - r.left - view.s * cx;
     view.ty = clientY - r.top - view.s * cy;
     applyView();
@@ -987,8 +1002,10 @@ async function renderViewer(imgId, mode) {
   /* ---------- Modos ---------- */
   function setMode(m) {
     if (mode === "edit" && m !== "edit") deselect();
+    const changed = mode !== m;
     mode = m;
     $(".viewer").dataset.mode = m;
+    if (changed && baseW) requestAnimationFrame(fit); // el margen alrededor cambia entre Editar y Estudiar
     history.replaceState(null, "", `#/img/${img.id}/${m}`);
     $("#seg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
     if (m !== "edit") placing = markMode = selMark = rectMode = drawMode = eraser = null;
@@ -1681,7 +1698,7 @@ async function renderViewer(imgId, mode) {
       if (pointers.size < 2) return;
       const [a, b] = [...pointers.values()];
       const r = stage.getBoundingClientRect();
-      view.s = clamp((g.s0 * Math.hypot(a.x - b.x, a.y - b.y)) / g.d0, 1, 10);
+      view.s = clamp((g.s0 * Math.hypot(a.x - b.x, a.y - b.y)) / g.d0, 0.4, 10);
       view.tx = (a.x + b.x) / 2 - r.left - view.s * g.cx;
       view.ty = (a.y + b.y) / 2 - r.top - view.s * g.cy;
       applyView();
@@ -1732,8 +1749,8 @@ async function renderViewer(imgId, mode) {
     }
     const l = labels.find((x) => x.id === g.id);
     if (mode === "edit" && l && g.kind === "lbl") {
-      l.x = clamp(g.l0.x + dx / (baseW * view.s), 0, 1);
-      l.y = clamp(g.l0.y + dy / (baseH * view.s), 0, 1);
+      l.x = clamp(g.l0.x + dx / (baseW * view.s), -OUT, 1 + OUT);
+      l.y = clamp(g.l0.y + dy / (baseH * view.s), -OUT, 1 + OUT);
       delete l.auto;
       if (isRect(l)) {
         const el = lbls.querySelector(`.occ[data-id="${l.id}"]`);
@@ -1757,8 +1774,8 @@ async function renderViewer(imgId, mode) {
         labels.push(g.newL);
         renderLabels();
       }
-      g.newL.x = clamp(p.x, 0, 1);
-      g.newL.y = clamp(p.y, 0, 1);
+      g.newL.x = clamp(p.x, -OUT, 1 + OUT);
+      g.newL.y = clamp(p.y, -OUT, 1 + OUT);
       updateLabelEl(g.newL);
     } else {
       view.tx = g.v0.tx + dx;
