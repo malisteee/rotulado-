@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=22";
+import { db, isDemo, localDb } from "./db.js?v=23";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -89,6 +89,8 @@ const todosOf = (labels) => (labels || []).filter(isTodo);
 // Lo que se estudia: rótulos con nombre y recuadros que tapan texto (con o sin nombre)
 const withText = (labels) => (labels || []).filter((l) => !l.kind && ((l.text || "").trim() || l.shape === "rect"));
 const isRect = (l) => l.shape === "rect";
+// Duda marcada: aro chico en el punto + "?" corrido a un lado (para no tapar la estructura)
+const qBadge = (text) => `<i class="qline"></i><span class="qb">?${(text || "").trim() ? ` <em>¿${esc(text.trim())}?</em>` : ""}</span>`;
 // Tipo de carpeta: radiografías (rx) o atlas de anatomía. El tipo va como prefijo oculto en el nombre.
 const ATLAS = "atlas::";
 const deckKind = (d) => ((d?.name || "").startsWith(ATLAS) ? "atlas" : "rx");
@@ -859,7 +861,7 @@ async function renderViewer(imgId, mode) {
       <div class="${labelClass(l)}" data-id="${l.id}" style="left:${l.x * 100}%;top:${l.y * 100}%;--c:${l.color}">${l.star ? "⭐ " : ""}${esc((l.text || "").trim() || "escribe…")}</div>
       ${mode === "edit" && l.tx != null && l.id === sel ? `<div class="tip" data-id="${l.id}" style="left:${l.tx * 100}%;top:${l.ty * 100}%"></div>` : ""}`).join("")
       + (mode === "edit" ? todos.filter((t) => t.tx != null).map((t) => `
-      <div class="qmark ${t.id === selMark ? "sel" : ""}" data-id="${t.id}" style="left:${t.tx * 100}%;top:${t.ty * 100}%">?${(t.text || "").trim() ? `<span class="qguess">¿${esc(t.text.trim())}?</span>` : ""}</div>`).join("") : "");
+      <div class="qmark ${t.id === selMark ? "sel" : ""}" data-id="${t.id}" style="left:${t.tx * 100}%;top:${t.ty * 100}%">${qBadge(t.text)}</div>`).join("") : "");
     drawArrows();
   }
   /* ---------- Geometría: rótulos sin líneas cruzadas ---------- */
@@ -1347,7 +1349,7 @@ async function renderViewer(imgId, mode) {
       inp.oninput = () => {
         t.text = inp.value;
         const el = lbls.querySelector(`.qmark[data-id="${t.id}"]`);
-        if (el) el.innerHTML = "?" + (inp.value.trim() ? `<span class="qguess">¿${esc(inp.value.trim())}?</span>` : "");
+        if (el) el.innerHTML = qBadge(inp.value);
         scheduleSave();
       };
       inp.onkeydown = (e) => { if (e.key === "Enter") closeMark(); };
