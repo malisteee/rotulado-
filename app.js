@@ -1,4 +1,4 @@
-import { db, isDemo, localDb } from "./db.js?v=19";
+import { db, isDemo, localDb } from "./db.js?v=20";
 
 /* ================================================================== */
 /* Utilidades                                                          */
@@ -664,6 +664,7 @@ async function renderViewer(imgId, mode) {
   const todos = allLabels.filter(isTodo);
   const strokes = allLabels.filter((l) => l.kind === "draw");
   let drawMode = false, eraser = false;
+  let arrowLen = +pref.get("arrowLen", "0.17"); // fracción del alto/ancho de la imagen
   let hlColor = pref.get("hlColor", HL_COLORS[0]);
   let hlW = +pref.get("hlW", HL_WIDTHS[1][1]);
   let placing = null; // duda que estás ubicando en la imagen
@@ -899,7 +900,7 @@ async function renderViewer(imgId, mode) {
       const ol = o.l;
       if (ol.tx != null && inRect(ol.tx * baseW, ol.ty * baseH, r)) sc += 700; // tapa el punto señalado de otro
     }
-    if (g.seg) sc += Math.hypot(g.seg.bx - g.seg.ax, g.seg.by - g.seg.ay) / fs; // preferir flechas cortas
+    if (g.seg) sc += Math.hypot(g.seg.bx - g.seg.ax, g.seg.by - g.seg.ay) / (fs * 6); // leve preferencia por no alejarse demasiado
     return sc;
   }
   // Busca la mejor posición para el rótulo alrededor de su punta
@@ -908,14 +909,15 @@ async function renderViewer(imgId, mode) {
     const others = labels.filter((o) => o !== l && ((o.text || "").trim() || o.id === sel)).map((o) => geom(o));
     const ex = l.tx * baseW, ey = l.ty * baseH, sz = sizeOf(l), base = Math.min(baseW, baseH);
     let best = null;
-    for (const f of [0.09, 0.13, 0.18, 0.24, 0.31, 0.4]) {
+    // Largo mínimo de la flecha según lo que elegiste (cortas / medias / largas)
+    for (const f of [1, 1.3, 1.65, 2.05, 2.5, 3].map((m) => m * arrowLen)) {
       for (let k = 0; k < 24; k++) {
         const a = (k / 24) * Math.PI * 2;
         const cx = ex + Math.cos(a) * (base * f + sz.w / 2 * Math.abs(Math.cos(a)));
         const cy = ey + Math.sin(a) * (base * f + sz.h / 2 * Math.abs(Math.sin(a)));
         const g = { l, rect: rectAt(cx, cy, sz), seg: segFrom(cx, cy, sz, l) };
         if (!g.seg) continue;
-        const sc = scoreOf(g, others) + f * 3;
+        const sc = scoreOf(g, others) + f * 4;
         if (!best || sc < best.sc) best = { sc, cx, cy };
       }
     }
@@ -940,12 +942,12 @@ async function renderViewer(imgId, mode) {
     if (!movable.length) return toast("Primero agrega rótulos con flecha");
     snap();
     const save = () => labels.map((l) => [l.x, l.y]);
-    let best = { n: countProblems(), pos: save() };
-    for (let pass = 0; pass < 6 && best.n > 0; pass++) {
+    let best = null;
+    for (let pass = 0; pass < 6 && !(best && best.n === 0 && pass >= 2); pass++) {
       for (const l of shuffle(movable)) placeSmart(l);
       for (const l of shuffle(movable)) placeSmart(l);
       const n = countProblems();
-      if (n < best.n) best = { n, pos: save() };
+      if (!best || n < best.n) best = { n, pos: save() };
     }
     labels.forEach((l, i) => ([l.x, l.y] = best.pos[i]));
     renderLabels();
@@ -1057,7 +1059,9 @@ async function renderViewer(imgId, mode) {
         <button class="btn small ${markMode ? "primary" : ""}" id="markBtn">❓ ${markMode ? "Marcando ✓" : "Marcar duda"}</button>
         <button class="btn small ${todos.length ? "sky" : ""}" id="todoBtn">📝 Dudas${todos.length ? ` (${todos.length})` : ""}</button>
         ${(() => { const n = baseW ? countProblems() : 0; return n ? `<span class="warn">⚠️ ${n} cruce${n === 1 ? "" : "s"}</span>` : ""; })()}
-        ${labels.some((l) => l.tx != null) ? `<button class="btn small" id="tidy">🪄 Ordenar</button>` : ""}
+        ${labels.some((l) => l.tx != null) ? `
+        <div class="seg" id="alen" title="Largo de las flechas">${[["Cortas", 0.09], ["Medias", 0.17], ["Largas", 0.26]].map(([n, v]) => `<button data-v="${v}" class="${v === arrowLen ? "on" : ""}">↗ ${n}</button>`).join("")}</div>
+        <button class="btn small" id="tidy">🪄 Ordenar</button>` : ""}
         <button class="btn small" id="undo" ${undoStack.length ? "" : "disabled"}>↶ Deshacer</button>
         <label class="size">Aa <input type="range" id="size" min="0.5" max="2" step="0.1" value="${labelSize}" /></label>
         <select id="move" aria-label="Mover a carpeta">
@@ -1066,6 +1070,13 @@ async function renderViewer(imgId, mode) {
         <button class="btn small danger" id="delImg" aria-label="Borrar imagen">🗑</button>`;
       tools.querySelector("#undo").onclick = undo;
       tools.querySelector("#tidy")?.addEventListener("click", tidyAll);
+      tools.querySelector("#alen")?.addEventListener("click", (e) => {
+        const v = e.target.closest("button")?.dataset.v;
+        if (!v || +v === arrowLen) return;
+        arrowLen = +v;
+        pref.set("arrowLen", v);
+        tidyAll(); // reubica todos los rótulos con el nuevo largo
+      });
       tools.querySelector("#rectBtn")?.addEventListener("click", () => {
         rectMode = !rectMode;
         markMode = false;
